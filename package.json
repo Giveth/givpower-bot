@@ -1,0 +1,44 @@
+{
+  "name": "@giveth/givpower-bot",
+  "version": "0.0.0",
+  "description": "GIVpower bot",
+  "main": "./dist/index.js",
+  "scripts": {
+    "start": "NODE_ENV=develop ts-node --project ./tsconfig.json ./src/index.ts",
+    "tslint": "tslint -c tslint.json '{src,test}/**/*.ts'",
+    "tslint:fix": "tslint -c tslint.json --fix '{src,test}/**/*.ts'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Giveth/givpower-bot.git"
+  },
+  "keywords": [
+    "giveth",
+    "giv",
+    "givpower",
+    "bot"
+  ],
+  "author": "Amin Latifi",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Giveth/givpower-bot/issues"
+  },
+  "homepage": "https://github.com/Giveth/givpower-bot#readme",
+  "dependencies": {
+    "dotenv": "^16.0.1",
+    "ethers": "^5.6.9",
+    "graphql": "^16.5.0",
+    "graphql-request": "^4.3.0",
+    "typescript": "^4.7.4",
+    "winston": "^3.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "prettier": "^2.4.1",
+    "ts-node": "^8.10.2",
+    "tslint": "^6.1.3",
+    "tslint-config-prettier": "^1.18.0",
+    "tslint-eslint-rules": "^5.4.0",
+    "tslint-plugin-prettier": "^2.3.0"
+  }
+}
