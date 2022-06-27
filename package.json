@@ -5,8 +5,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "start": "NODE_ENV=develop ts-node --project ./tsconfig.json ./src/index.ts",
-    "tslint": "tslint -c tslint.json '{src,test}/**/*.ts'",
-    "tslint:fix": "tslint -c tslint.json --fix '{src,test}/**/*.ts'"
+    "tslint": "tslint -c tslint.json '{src,test,types}/**/*.ts'",
+    "tslint:fix": "tslint -c tslint.json --fix '{src,test,types}/**/*.ts'"
   },
   "repository": {
     "type": "git",

@@ -3,9 +3,17 @@ import config from './config';
 import logger from './logger';
 import { getCurrentBlock, getCurrentRound } from './blockchain';
 import { ethers } from 'ethers';
-import { cursorTo } from 'readline';
+import { UnlockablePositions } from '../types/shared';
 
-const SUBGRAPH_NETWORK_MAX_BLOCK_GAP = 4;
+/**
+ * This desirable value is a little less than `POLL_PERIOD_SECOND / Network Average Block Time`
+ * If POLL_PERIOD_SECOND 300 seconds (5m)
+ * Mainnet < 300 / 20 = 15
+ * Gnosis < 300 / 5 = 60
+ */
+const SUBGRAPH_NETWORK_MAX_BLOCK_GAP = 10;
+
+let acceptableNetworkGap = SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
 
 const checkSubgraphHealth = (
 	networkLatestBlock: ethers.providers.Block,
@@ -15,7 +23,7 @@ const checkSubgraphHealth = (
 	logger.info('network latest block:', networkLatestBlockNumber);
 	logger.info('subgraph network number:', subgraphNetworkNumber);
 	if (
-		subgraphNetworkNumber + SUBGRAPH_NETWORK_MAX_BLOCK_GAP <=
+		subgraphNetworkNumber + acceptableNetworkGap <=
 		networkLatestBlockNumber
 	) {
 		logger.error(`Subgraph is ${
@@ -24,9 +32,16 @@ const checkSubgraphHealth = (
         Network Latest Block Number: ${networkLatestBlockNumber}
         Subgraph block number: ${subgraphNetworkNumber}
         `);
+
+		// Next time use the data if subgraph block number will be good for this run!
+		acceptableNetworkGap += SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
 		return false;
 	}
 
+	acceptableNetworkGap = Math.max(
+		SUBGRAPH_NETWORK_MAX_BLOCK_GAP,
+		acceptableNetworkGap - SUBGRAPH_NETWORK_MAX_BLOCK_GAP,
+	);
 	return true;
 };
 
@@ -50,7 +65,7 @@ const getSubgraphData = async () => {
 	const query = gql`
 		query getUnlockablePositions($currentRound: Int!) {
 			powerLocks(
-				first: 10
+				first: 100
 				where: { unlocked: false, untilRound_lt: $currentRound }
 				orderBy: untilRound
 				orderDirection: asc
@@ -82,10 +97,6 @@ const getSubgraphData = async () => {
 	return isOk && subgraphResponse;
 };
 
-interface UnlockablePositions {
-	[round: number]: string[];
-}
-
 export const getUnlockablePositions = async (): Promise<
 	UnlockablePositions | undefined
 > => {
@@ -95,7 +106,7 @@ export const getUnlockablePositions = async (): Promise<
 
 	interface PowerLock {
 		user: { id: string };
-		untilRound: number;
+		untilRound: string;
 	}
 
 	const powerLocks: PowerLock[] = subgraphResponse.powerLocks;
