@@ -13,8 +13,8 @@
         "arrowParens": "avoid",
         "singleQuote": true,
         "semi": true,
-        "tabWidth": 2,
-        "useTabs": false,
+        "tabWidth": 4,
+        "useTabs": true,
         "trailingComma": "all",
         "jsdoc-format": false
       }
@@ -72,11 +72,6 @@
       "check-branch",
       "check-module"
     ],
-    "object-curly-spacing": true,
-    "indent": [
-      true,
-      "spaces",
-      2
-    ]
+    "object-curly-spacing": true
   }
 }

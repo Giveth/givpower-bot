@@ -1,9 +1,10 @@
 import logger from './logger';
-import { getCurrentRound } from './subgraph';
+import { getCurrentRound } from './blockchain';
+import { getUnlockablePositions } from './subgraph';
 
 const service = async () => {
-  const currentRound = await getCurrentRound();
-  logger.info('current round:', currentRound);
+	const positions = await getUnlockablePositions();
+	logger.info(positions);
 };
 
 export default service;
