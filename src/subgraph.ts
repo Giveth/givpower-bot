@@ -46,27 +46,28 @@ const checkSubgraphHealth = (
 };
 
 const getSubgraphData = async () => {
-	let currentRound;
 	let currentBlock;
 	let subgraphResponse;
 	try {
-		[currentRound, currentBlock] = await Promise.all([
-			getCurrentRound(),
-			getCurrentBlock(),
-		]);
+		currentBlock = (await getCurrentBlock()) as ethers.providers.Block;
 	} catch (e) {
-		logger.error(
-			'Error on getting last round and latest block from network',
-			e,
-		);
+		logger.error('Error on getting latest block from network', e);
+		return undefined;
+	}
+
+	if (!currentBlock) {
+		logger.error('Current block is undefined!');
 		return undefined;
 	}
 
 	const query = gql`
-		query getUnlockablePositions($currentRound: Int!) {
-			powerLocks(
+		query getUnlockablePositions($lastBlockTimeStamp: Int!) {
+			tokenLocks(
 				first: 100
-				where: { unlocked: false, untilRound_lt: $currentRound }
+				where: {
+					unlocked: false
+					unlockableAt_lte: $lastBlockTimeStamp
+				}
 				orderBy: untilRound
 				orderDirection: asc
 			) {
@@ -85,7 +86,7 @@ const getSubgraphData = async () => {
 
 	try {
 		subgraphResponse = await request(config.subgraphEndpoint, query, {
-			currentRound,
+			lastBlockTimeStamp: currentBlock.timestamp,
 		});
 	} catch (e) {
 		logger.error('Error getting locked positions from subgraph', e);
@@ -104,20 +105,20 @@ export const getUnlockablePositions = async (): Promise<
 
 	if (!subgraphResponse) return undefined;
 
-	interface PowerLock {
+	interface TokenLock {
 		user: { id: string };
 		untilRound: string;
 	}
 
-	const powerLocks: PowerLock[] = subgraphResponse.powerLocks;
+	const tokenLocks: TokenLock[] = subgraphResponse.tokenLocks;
 
 	const result: UnlockablePositions = {};
 
-	powerLocks.forEach(powerLock => {
+	tokenLocks.forEach(tokenLock => {
 		const {
 			user: { id: userAddress },
 			untilRound,
-		} = powerLock;
+		} = tokenLock;
 		if (result[untilRound]) {
 			result[untilRound].push(userAddress);
 		} else {
