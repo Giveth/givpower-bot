@@ -7,7 +7,8 @@
     "start": "NODE_ENV=develop ts-node --project ./tsconfig.json ./src/index.ts",
     "tslint": "tslint -c tslint.json '{src,test,types}/**/*.ts'",
     "tslint:fix": "tslint -c tslint.json --fix '{src,test,types}/**/*.ts'",
-    "build": "tsc -p tsconfig.json"
+    "clean": "rm -rf build",
+    "build": "yarn clean && tsc -p tsconfig.json && cd build && ln -s ../config ."
   },
   "repository": {
     "type": "git",
