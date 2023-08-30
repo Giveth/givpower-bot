@@ -4,7 +4,8 @@
   "description": "GIVpower bot",
   "main": "./dist/index.js",
   "scripts": {
-    "start": "NODE_ENV=develop ts-node --project ./tsconfig.json ./src/index.ts",
+    "start-dev": "NODE_ENV=develop ts-node --project ./tsconfig.json ./src/index.ts",
+    "start": "cd build && node ./src/index.js",
     "tslint": "tslint -c tslint.json '{src,test,types}/**/*.ts'",
     "tslint:fix": "tslint -c tslint.json --fix '{src,test,types}/**/*.ts'",
     "clean": "rm -rf build",
