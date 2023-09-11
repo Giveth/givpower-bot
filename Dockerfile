@@ -5,7 +5,7 @@ FROM node:18
 WORKDIR /usr/src/app
 
 # Copy the src folder
-COPY src ./src
+COPY build ./build
 
 # Copy the package.json and package-lock.json files
 COPY package*.json ./
