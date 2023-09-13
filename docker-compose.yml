@@ -3,8 +3,8 @@ version: '3.9'
 services:
   givpower-bot:
     image: ghcr.io/giveth/givpower-bot:main
-    environment:
-      - NODE_ENV=develop
+    env_file:
+      - ./config/.env
     restart: unless-stopped
     volumes:
       - ./config:/usr/src/app/config
