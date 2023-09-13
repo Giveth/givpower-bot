@@ -9,4 +9,4 @@ services:
     volumes:
       - ./config:/usr/src/app/config
     ports:
-      - "3002:3000"
+      - "3000"
