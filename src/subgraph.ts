@@ -64,10 +64,7 @@ const getSubgraphData = async () => {
 		query getUnlockablePositions($lastBlockTimeStamp: Int!) {
 			tokenLocks(
 				first: 100
-				where: {
-					unlocked: false
-					unlockableAt_lte: $lastBlockTimeStamp
-				}
+				where: { unlocked: false, unlockableAt_lte: $lastBlockTimeStamp }
 				orderBy: untilRound
 				orderDirection: asc
 			) {
@@ -85,11 +82,20 @@ const getSubgraphData = async () => {
 	`;
 
 	try {
-		subgraphResponse = await request(config.subgraphEndpoint, query, {
-			lastBlockTimeStamp: currentBlock.timestamp,
-		});
+		console.log('subgraphEndpoint', config.subgraphEndpoint);
+		subgraphResponse = await request(
+			config.subgraphEndpoint,
+			query,
+			{
+				lastBlockTimeStamp: currentBlock.timestamp,
+			},
+			{ origin: config.subgraphDomain },
+		);
 	} catch (e) {
-		logger.error('Error getting locked positions from subgraph', e);
+		logger.error(
+			'Error getting locked positions from subgraph',
+			JSON.stringify(e, null, 2),
+		);
 		return undefined;
 	}
 

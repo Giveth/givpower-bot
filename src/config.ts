@@ -3,10 +3,7 @@ import path from 'path';
 import logger from './logger';
 
 dotenv.config({
-	path: path.resolve(
-		__dirname,
-		`../config/${process.env.NODE_ENV || ''}.env`,
-	),
+	path: path.resolve(__dirname, `../config/${process.env.NODE_ENV || ''}.env`),
 });
 
 if (!process.env.GIVPOWER_CONTRACT_ADDRESS) {
@@ -23,6 +20,7 @@ const config: {
 	nodeUrl: string;
 	pollPeriodSecond: number;
 	subgraphEndpoint: string;
+	subgraphDomain: string;
 	givpowerContractAddress: string;
 	privateKey: string;
 	unlockPerTransaction: number;
@@ -32,6 +30,7 @@ const config: {
 	nodeUrl: process.env.NODE_URL || 'https://rpc.gnosischain.com/',
 	pollPeriodSecond: Number(process.env.POLL_PERIOD_SECOND) || 60,
 	subgraphEndpoint: process.env.SUBGRAPH_ENDPOINT,
+	subgraphDomain: process.env.SUBGRAPH_DOMAIN || 'https://giveth.io',
 	givpowerContractAddress: process.env.GIVPOWER_CONTRACT_ADDRESS,
 	privateKey: process.env.PRIVATE_KEY || '',
 	unlockPerTransaction: Number(process.env.UNLOCK_PER_TRANSACTION) || 1,
