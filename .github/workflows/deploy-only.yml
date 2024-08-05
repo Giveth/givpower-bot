@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and Redeploy
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATEKEY }}
+          port: ${{ secrets.SSH_PORT }}
+          debug: true
+          script: |
+            cd ~/givpower-bots/givpower-bot-optimism-production
+            docker compose stop givpower-bot
+            docker compose pull givpower-bot
+            docker compose up -d givpower-bot
+            cd ~/givpower-bots/givpower-bot-xdai-production
+            docker compose stop givpower-bot
+            docker compose pull givpower-bot
+            docker compose up -d givpower-bot
+            docker image prune -a --force
