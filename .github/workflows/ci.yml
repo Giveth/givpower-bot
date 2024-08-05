@@ -47,7 +47,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATEKEY }}
           port: ${{ secrets.SSH_PORT }}
           script: |
-            cd givpower-bot
+            cd ~/givpower-bots/givpower-bot-optimism-production
+            docker compose stop givpower-bot
+            docker compose pull givpower-bot
+            docker compose up -d givpower-bot
+            cd ~/givpower-bots/givpower-bot-xdai-production
             docker compose stop givpower-bot
             docker compose pull givpower-bot
             docker compose up -d givpower-bot
