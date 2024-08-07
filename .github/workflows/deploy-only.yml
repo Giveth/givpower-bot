@@ -15,7 +15,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
+          username: ${{ secrets.USER }}
           key: ${{ secrets.SSH_PRIVATEKEY }}
           port: ${{ secrets.SSH_PORT }}
           command_timeout: 20m
