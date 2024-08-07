@@ -7,8 +7,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Set Up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATEKEY }}
       - name: SSH and Redeploy
-        uses: appleboy/ssh-action@v1.0.0
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
