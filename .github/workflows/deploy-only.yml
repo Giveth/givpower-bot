@@ -18,9 +18,6 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATEKEY }}
           port: ${{ secrets.SSH_PORT }}
-          script_stop: true
-          host_key_algorithms: ssh-rsa
-          debug: true
           script: |
             cd ~/givpower-bots/givpower-bot-optimism-production
             docker compose stop givpower-bot
