@@ -1,4 +1,4 @@
-name: auto-deploy-main
+name: deploy-on-server
 on:
   workflow_dispatch:
 
