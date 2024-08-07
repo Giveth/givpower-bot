@@ -1,0 +1,18 @@
+name: auto-deploy-main
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    - name: SSH and Redeploy
+      uses: easingthemes/ssh-deploy@main
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATEKEY }}
+        REMOTE_HOST: ${{ secrets.HOST }}
+        REMOTE_USER: ${{ secrets.USER }}
+        TARGET: "/path/to/your/directory"
+      with:
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATEKEY }}
