@@ -12,7 +12,7 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATEKEY }}
       - name: SSH and Redeploy
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
