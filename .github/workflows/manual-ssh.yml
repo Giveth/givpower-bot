@@ -1,8 +1,5 @@
 name: auto-deploy-main
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -10,12 +7,22 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     steps:
-      - name: SSH and Redeploy
-        uses: easingthemes/ssh-deploy@main
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATEKEY }}
-          REMOTE_HOST: ${{ secrets.HOST }}
-          REMOTE_USER: ${{ secrets.USER }}
-          TARGET: "/path/to/your/directory"
-        with:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATEKEY }}
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2 
+      with:
+        key: ${{ secrets.SSH_PRIVATEKEY }}
+        known_hosts: ${{ secrets.KNOWN_HOSTS }}
+
+    - name: SSH and Redeploy
+      run: |
+        ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa ${{ secrets.USERNAME }}@${{ secrets.HOST }} '
+          cd ~/givpower-bots/givpower-bot-optimism-production &&
+          docker compose stop givpower-bot &&
+          docker compose pull givpower-bot &&
+          docker compose up -d givpower-bot &&
+          cd ~/givpower-bots/givpower-bot-xdai-production &&
+          docker compose stop givpower-bot &&
+          docker compose pull givpower-bot &&
+          docker compose up -d givpower-bot &&
+          docker image prune -a --force
+        '
