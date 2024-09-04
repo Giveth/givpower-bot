@@ -26,6 +26,7 @@ const config: {
 	unlockPerTransaction: number;
 	gasMaxBaseFee: number;
 	gasPriorityFee: number;
+	noGasOverride: boolean;
 } = {
 	nodeUrl: process.env.NODE_URL || 'https://rpc.gnosischain.com/',
 	pollPeriodSecond: Number(process.env.POLL_PERIOD_SECOND) || 60,
@@ -36,6 +37,7 @@ const config: {
 	unlockPerTransaction: Number(process.env.UNLOCK_PER_TRANSACTION) || 1,
 	gasMaxBaseFee: Number(process.env.GAS_MAX_BASE_FEE) || 2,
 	gasPriorityFee: Number(process.env.GAS_PRIORITY_FEE) || 2,
+	noGasOverride: process.env.NO_GAS_OVERRIDE === 'true',
 };
 
 export default config;
