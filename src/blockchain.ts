@@ -59,6 +59,15 @@ const executeUnlockTransaction = async (
 	const maxPriorityFeePerGas = !config.noGasOverride
 		? gwei2wei(config.gasPriorityFee)
 		: undefined;
+
+	console.log('Transaction config:', {
+		nonce,
+		round,
+		userAddresses,
+		maxFeePerGas,
+		maxPriorityFeePerGas,
+	});
+
 	try {
 		const tx = await contract.unlock(userAddresses, round, {
 			nonce,
