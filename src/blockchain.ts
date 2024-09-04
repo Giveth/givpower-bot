@@ -53,11 +53,17 @@ const executeUnlockTransaction = async (
 	nonce: ${nonce}, 
 	round: ${round}
 	userAddress: ${userAddresses}`);
+	const maxFeePerGas = !config.noGasOverride
+		? gwei2wei(config.gasMaxBaseFee)
+		: undefined;
+	const maxPriorityFeePerGas = !config.noGasOverride
+		? gwei2wei(config.gasPriorityFee)
+		: undefined;
 	try {
 		const tx = await contract.unlock(userAddresses, round, {
 			nonce,
-			maxFeePerGas: gwei2wei(config.gasMaxBaseFee),
-			maxPriorityFeePerGas: gwei2wei(config.gasPriorityFee),
+			maxFeePerGas,
+			maxPriorityFeePerGas,
 		});
 		logger.info('Transaction hash:', tx.hash);
 		const txResponse = await tx.wait();
@@ -88,10 +94,7 @@ export const unlockPositions = async (
 			i < userAddresses.length;
 			i = i + config.unlockPerTransaction
 		) {
-			const chunk = userAddresses.slice(
-				i,
-				i + config.unlockPerTransaction,
-			);
+			const chunk = userAddresses.slice(i, i + config.unlockPerTransaction);
 
 			await executeUnlockTransaction(nonce, round, chunk);
 			nonce += 1;
