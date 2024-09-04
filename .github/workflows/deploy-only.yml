@@ -29,3 +29,8 @@ jobs:
             docker compose pull givpower-bot
             docker compose up -d givpower-bot
             docker image prune -a --force
+            cd ~/givpower-bots/givpower-bot-zkevm-production
+            docker compose stop givpower-bot
+            docker compose pull givpower-bot
+            docker compose up -d givpower-bot
+            docker image prune -a --force
