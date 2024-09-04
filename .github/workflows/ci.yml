@@ -1,6 +1,9 @@
 name: ci
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -50,6 +53,11 @@ jobs:
             docker compose pull givpower-bot
             docker compose up -d givpower-bot
             cd ~/givpower-bots/givpower-bot-xdai-production
+            docker compose stop givpower-bot
+            docker compose pull givpower-bot
+            docker compose up -d givpower-bot
+            docker image prune -a --force
+            cd ~/givpower-bots/givpower-bot-zkevm-production
             docker compose stop givpower-bot
             docker compose pull givpower-bot
             docker compose up -d givpower-bot
