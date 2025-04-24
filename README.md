@@ -7,10 +7,10 @@ The GIVpower Bot is a service that automates the unlocking of GIVpower positions
 
 ### Key Features
 - Automated unlocking of GIVpower positions
-- Integration with Ethereum blockchain
+- Integration with EVM blockchains
 - Subgraph querying for position data
 - Configurable service intervals
-- Comprehensive logging system
+- Configurable unlock batch size
 
 ### Live Links
 - Mainnet: [Giveth Platform](https://giveth.io)
@@ -37,9 +37,8 @@ graph TD
 
 ### Data Flow
 1. Bot queries subgraph for unlockable positions
-2. Validates positions against blockchain state
-3. Executes unlock transactions when conditions are met
-4. Logs all actions and results
+2. Executes unlock transactions when conditions are met
+3. Logs all actions and results
 
 ## 3. Getting Started
 
@@ -68,36 +67,26 @@ graph TD
    ```
 
 ### Configuration
-Create a `.env` file in the root directory with the following variables:
-```
-NODE_ENV=develop
-INFURA_PROJECT_ID=your_infura_id
-PRIVATE_KEY=your_wallet_private_key
-```
+Create a `.env` file in the config directory by copying the `.env.example` file.
+
+**NOTE:** You can create `<NODE_ENV>.env` file and set `NODE_ENV` in command line to read the correct environment variables.
 
 ## 4. Usage Instructions
 
 ### Running the Application
 - Development mode:
+
+  Create a `develop.env` file in the config directory by copying the `.env.example` file. Fill in the correct values for the environment variables.
   ```bash
   yarn start-dev
   ```
 
 - Production mode:
+
+  Create `.env` file in the config directory by copying the `.env.example` file. Fill in the correct values for the environment variables.
   ```bash
   yarn serve
   ```
-
-### Testing
-Run the linter:
-```bash
-yarn tslint
-```
-
-Fix linting issues:
-```bash
-yarn tslint:fix
-```
 
 ### Common Tasks
 - Clean build directory:
@@ -113,13 +102,9 @@ yarn tslint:fix
 ## 5. Deployment Process
 
 ### Environments
-- Development: Local development and testing
-- Production: Mainnet deployment
-
+- Copy `.env.example` file to `.env` in the config directory.
 ### Deployment Steps
-1. Ensure all environment variables are set
-2. Build the project: `yarn build`
-3. Start the service: `yarn serve`
+- Run `docker compose up -d` to start the service.
 
 ### CI/CD Integration
 The project uses GitHub Actions for CI/CD. Workflows are defined in the `.github/workflows` directory.
@@ -127,19 +112,10 @@ The project uses GitHub Actions for CI/CD. Workflows are defined in the `.github
 ## 6. Troubleshooting
 
 ### Common Issues
-1. **Connection Issues**: Ensure your Infura/Alchemy endpoint is working
-2. **Transaction Failures**: Check gas prices and network congestion
+1. **Connection Issues**: Ensure your NODE_URL is working
+2. **Transaction Failures**: Check gas prices, account corresponding to `PRIVATE_KEY` has enough balance, GIVPOWER_CONTRACT_ADDRESS, and network congestion
 3. **Subgraph Errors**: Verify subgraph health and synchronization
 
 ### Logs and Debugging
 - Logs are stored in the `logs` directory
 - Use Winston logger for detailed debugging
-- Check PM2 logs for production issues:
-  ```bash
-  pm2 logs givpower-bot
-  ```
-
-## License
-ISC License - See [LICENSE](LICENSE) file for details
-Deployed to `service.giveth.io`
-
