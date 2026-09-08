@@ -10,7 +10,8 @@
     "tslint:fix": "tslint -c tslint.json --fix '{src,test,types}/**/*.ts'",
     "clean": "rm -rf build",
     "build": "yarn clean && tsc -p tsconfig.json && cd build && ln -s ../config .",
-    "serve": "yarn build && pm2 startOrRestart ecosystem.config.js --env develop"
+    "serve": "yarn build && pm2 startOrRestart ecosystem.config.js --env develop",
+    "verify-guards": "ts-node --project ./tsconfig.json ./src/scripts/verifyGuards.ts"
   },
   "repository": {
     "type": "git",
