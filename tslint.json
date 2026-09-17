@@ -7,18 +7,7 @@
     "tslint-config-prettier"
   ],
   "rules": {
-    "prettier": [
-      true,
-      {
-        "arrowParens": "avoid",
-        "singleQuote": true,
-        "semi": true,
-        "tabWidth": 4,
-        "useTabs": true,
-        "trailingComma": "all",
-        "jsdoc-format": false
-      }
-    ],
+    "prettier": true,
     "jsdoc-format": false,
     "adjacent-overload-signatures": true,
     "quotemark": [
@@ -73,5 +62,10 @@
       "check-module"
     ],
     "object-curly-spacing": true
+  },
+  "linterOptions": {
+    "exclude": [
+      "src/scripts/**/*.ts"
+    ]
   }
 }
