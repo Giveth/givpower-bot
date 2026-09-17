@@ -8,6 +8,7 @@ import {
 	UnlockRunSummary,
 } from '../types/shared';
 import { GIVpower } from '../types/contracts/GIVpower';
+import { sendAlert } from './alert';
 
 const { abi: GIVpowerABI } = GIVpowerArtifact;
 const { privateKey, givpowerContractAddress, nodeUrl } = config;
@@ -30,6 +31,28 @@ const TOKEN_UNLOCKED_TOPIC = ethers.utils.id(
 );
 
 const contractAddressLower = givpowerContractAddress.toLowerCase();
+
+/**
+ * abi/GIVpower.json declares lockedTokens and _powerUntilRound, neither of
+ * which exists on the deployed contract, and omits userLocks, which does.
+ * Reading it off `contract` compiles (the generated typechain types disagree
+ * with the bundled ABI) but is undefined at runtime, so attach a minimal
+ * fragment instead. userLocks(user) is that user's totalAmountLocked.
+ */
+const lockReader = new ethers.Contract(
+	givpowerContractAddress,
+	['function userLocks(address) view returns (uint256)'],
+	provider,
+);
+
+/**
+ * How many rounds must have passed before a disagreement can be blamed on the
+ * subgraph rather than on it not having indexed the bot's own work yet.
+ */
+const SETTLED_ROUND_LAG = 2;
+
+const explorerTxLink = (hash: string): string =>
+	config.explorerBaseUrl ? `${config.explorerBaseUrl}/tx/${hash}` : hash;
 
 export const getCurrentRound = async (): Promise<number | undefined> => {
 	let currentRound;
@@ -134,11 +157,28 @@ const executeUnlockTransaction = async (
 	).length;
 
 	if (unlocked === 0) {
-		logger.error(`Transaction ${tx.hash} succeeded but unlocked nothing.
-		Round: ${round}
-		Addresses: ${userAddresses}
-		The chain considers these positions already unlocked, so the subgraph
-		is reporting stale data. Gas was spent for no effect.`);
+		await sendAlert({
+			severity: 'error',
+			title: 'Unlock transaction did nothing',
+			description:
+				'The transaction succeeded but emitted no TokenUnlocked events, so ' +
+				'the chain considers these positions already unlocked. The subgraph ' +
+				'is reporting stale data and gas was spent for no effect.',
+			fields: [
+				{ name: 'Round', value: String(round), inline: true },
+				{
+					name: `Addresses (${userAddresses.length})`,
+					value: userAddresses.join('\n'),
+				},
+				{ name: 'Transaction', value: `\`${tx.hash}\`` },
+				...(config.explorerBaseUrl
+					? [{ name: 'Explorer', value: explorerTxLink(tx.hash) }]
+					: []),
+			],
+			// Keyed on the round, not the hash: every poll produces a fresh hash,
+			// so a per-hash key would post on every poll forever.
+			dedupeKey: `junk-tx:${round}`,
+		});
 	} else {
 		logger.info(`Transaction ${tx.hash} unlocked ${unlocked} position(s)`);
 	}
@@ -148,6 +188,7 @@ const executeUnlockTransaction = async (
 
 export const unlockPositions = async (
 	unlockablePositions: UnlockablePositions,
+	currentRound: number,
 ): Promise<UnlockRunSummary> => {
 	const summary: UnlockRunSummary = {
 		transactionsSent: 0,
@@ -161,14 +202,6 @@ export const unlockPositions = async (
 	);
 	if (rounds.length === 0) {
 		logger.info('No unlockable position to unlock');
-		return summary;
-	}
-
-	const currentRound = await getCurrentRound();
-	if (currentRound === undefined) {
-		logger.error(
-			'Skipping unlock run: could not read currentRound from the contract',
-		);
 		return summary;
 	}
 
@@ -222,4 +255,135 @@ export const unlockPositions = async (
 	}
 
 	return summary;
+};
+
+/**
+ * Reports a wallet that can no longer pay for its own work. Checked every poll
+ * regardless of whether there is anything to unlock - the Gnosis instance sat
+ * empty for 12 days precisely because nothing was watching when it was idle.
+ */
+export const checkWalletBalance = async (): Promise<void> => {
+	let balance: ethers.BigNumber;
+	try {
+		balance = await signer.getBalance();
+	} catch (e) {
+		logger.error('Could not read bot wallet balance', e);
+		return;
+	}
+
+	let minimum: ethers.BigNumber;
+	try {
+		// toFixed rather than String: a small value stringifies to exponential
+		// notation ("1e-7"), which parseUnits rejects. An unusable alerting
+		// setting must not throw into the unlock path.
+		minimum = ethers.utils.parseUnits(config.minWalletBalance.toFixed(18), 18);
+	} catch (e) {
+		logger.error(
+			`MIN_WALLET_BALANCE (${config.minWalletBalance}) is not a usable amount`,
+			e,
+		);
+		return;
+	}
+	if (balance.gte(minimum)) return;
+
+	await sendAlert({
+		severity: 'error',
+		title: 'GIVpower bot wallet is low',
+		description:
+			'The bot cannot keep paying for unlock transactions. Once it runs out, ' +
+			'positions stop being unlocked and nothing else reports it.',
+		fields: [
+			{ name: 'Address', value: signer.address },
+			{
+				name: 'Balance',
+				value: ethers.utils.formatEther(balance),
+				inline: true,
+			},
+			{
+				name: 'Minimum',
+				value: String(config.minWalletBalance),
+				inline: true,
+			},
+		],
+		dedupeKey: 'wallet-low',
+	});
+};
+
+/**
+ * Checks a sample of the positions the subgraph claims are unlockable against
+ * the chain, before any gas is spent.
+ *
+ * The contract exposes no per-round balance - `userLocks` is the user's total
+ * across every round, and `_powerUntilRound` reverts on the deployed contract
+ * - so this can only ever prove the subgraph wrong, never right. A user whose
+ * total is zero cannot have anything to unlock in any round, so the subgraph
+ * is definitely wrong about them. A user still holding a live lock reads
+ * non-zero and is not flagged even when this particular position is phantom.
+ * It is a sufficient signal, not a complete one; the stale-round refusal and
+ * the junk-transaction alert cover the rest.
+ *
+ * Rounds the bot is actively working are excluded. It unlocks them and the
+ * subgraph takes a moment to index that, so a freshly emptied user would
+ * otherwise be reported as a mismatch every time the bot did its job.
+ *
+ * Returns the users that disagreed.
+ */
+export const findSubgraphChainMismatches = async (
+	positions: UnlockablePositions,
+	currentRound: number,
+	deployment?: string,
+): Promise<string[]> => {
+	const sampleSize = Math.max(0, Math.floor(config.mismatchSampleSize));
+	if (sampleSize === 0) return [];
+
+	const settledRounds = Object.keys(positions).filter(
+		round => currentRound - Number(round) >= SETTLED_ROUND_LAG,
+	);
+
+	const users = Array.from(
+		new Set(
+			settledRounds.reduce<string[]>(
+				(all, round) => all.concat(positions[round] || []),
+				[],
+			),
+		),
+	).slice(0, sampleSize);
+
+	if (users.length === 0) return [];
+
+	const mismatched: string[] = [];
+	for (const user of users) {
+		try {
+			const locked = (await lockReader.userLocks(user)) as ethers.BigNumber;
+			if (locked.isZero()) mismatched.push(user);
+		} catch (e) {
+			logger.warn(`Could not read userLocks for ${user}`, e);
+		}
+	}
+
+	if (mismatched.length > 0) {
+		await sendAlert({
+			// Warning rather than critical: this proves the subgraph wrong but
+			// cannot measure how wrong, and it does not by itself mean gas is
+			// being wasted - the guards may already be refusing these rounds.
+			severity: 'warning',
+			title: 'Subgraph disagrees with the chain',
+			description:
+				`${mismatched.length} of ${users.length} sampled positions are ` +
+				'reported unlockable by the subgraph but hold nothing on chain. ' +
+				'The subgraph index is wrong; unlocking these would only burn gas.',
+			fields: [
+				{
+					name: 'Mismatched',
+					value: `${mismatched.length}/${users.length}`,
+					inline: true,
+				},
+				{ name: 'Deployment', value: deployment || 'unknown', inline: true },
+				{ name: 'Example user', value: mismatched[0] },
+			],
+			dedupeKey: 'subgraph-mismatch',
+		});
+	}
+
+	return mismatched;
 };

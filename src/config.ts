@@ -30,6 +30,12 @@ const numberFromEnv = (
 	return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const splitIds = (raw: string | undefined): string[] =>
+	(raw || '')
+		.split(',')
+		.map(id => id.trim())
+		.filter(Boolean);
+
 const config: {
 	nodeUrl: string;
 	pollPeriodSecond: number;
@@ -45,6 +51,16 @@ const config: {
 	maxIneffectivePolls: number;
 	subgraphMaxBlockGap: number;
 	txWaitTimeoutMs: number;
+	discordWebhookUrl: string;
+	discordSourceLabel: string;
+	chainLabel: string;
+	alertThrottleMs: number;
+	alertFailureBackoffMs: number;
+	mentionUserIds: string[];
+	mentionRoleIds: string[];
+	explorerBaseUrl: string;
+	minWalletBalance: number;
+	mismatchSampleSize: number;
 } = {
 	nodeUrl: process.env.NODE_URL || 'https://rpc.gnosischain.com/',
 	pollPeriodSecond: Number(process.env.POLL_PERIOD_SECOND) || 60,
@@ -97,6 +113,56 @@ const config: {
 	txWaitTimeoutMs: Math.max(
 		1_000,
 		numberFromEnv(process.env.TX_WAIT_TIMEOUT_MS, 180_000),
+	),
+
+	/**
+	 * Discord webhook for fault alerts. Unset disables alerting entirely, which
+	 * is how every instance behaves until one is configured.
+	 */
+	discordWebhookUrl: process.env.DISCORD_ALERT_WEBHOOK_URL || '',
+
+	/** Shown in the embed footer, so one shared channel stays readable. */
+	discordSourceLabel: process.env.DISCORD_ALERT_SOURCE_LABEL || 'givpower-bot',
+
+	/**
+	 * Which chain this instance runs against. Set explicitly rather than read
+	 * from the RPC so it is still correct when the RPC is down at boot.
+	 */
+	chainLabel: process.env.DISCORD_ALERT_CHAIN_LABEL || 'unknown-chain',
+
+	/**
+	 * How long the same condition stays quiet after alerting. At a 300s poll
+	 * period a short window would post on nearly every poll.
+	 */
+	alertThrottleMs:
+		numberFromEnv(process.env.DISCORD_ALERT_THROTTLE_MINUTES, 60) * 60 * 1000,
+
+	/**
+	 * How long to stay quiet after a failed send, so one Discord outage cannot
+	 * turn a multi-chunk poll into a burst of slow failing requests.
+	 */
+	alertFailureBackoffMs: numberFromEnv(
+		process.env.DISCORD_ALERT_FAILURE_BACKOFF_MS,
+		60_000,
+	),
+
+	mentionUserIds: splitIds(process.env.DISCORD_ALERT_MENTION_USER_IDS),
+	mentionRoleIds: splitIds(process.env.DISCORD_ALERT_MENTION_ROLE_IDS),
+
+	/** Used to link transactions in alerts, e.g. https://optimistic.etherscan.io */
+	explorerBaseUrl: process.env.EXPLORER_BASE_URL || '',
+
+	/** Native-currency balance below which the wallet is reported as low. */
+	minWalletBalance: numberFromEnv(process.env.MIN_WALLET_BALANCE, 0.05),
+
+	/**
+	 * How many of the users the subgraph claims are unlockable to verify against
+	 * the chain each poll. One disagreement is enough to prove the subgraph
+	 * wrong, so a small sample is plenty.
+	 */
+	mismatchSampleSize: numberFromEnv(
+		process.env.SUBGRAPH_MISMATCH_SAMPLE_SIZE,
+		10,
 	),
 };
 
