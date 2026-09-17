@@ -20,6 +20,11 @@ const MAX_ACCEPTABLE_NETWORK_GAP = SUBGRAPH_NETWORK_MAX_BLOCK_GAP * 5;
 
 let acceptableNetworkGap = SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
 
+/** Which deployment the gateway last served us, for alert context. */
+let lastDeployment = '';
+
+export const getLastSubgraphDeployment = (): string => lastDeployment;
+
 const checkSubgraphHealth = (
 	networkLatestBlock: ethers.providers.Block,
 	subgraphNetworkNumber: number | undefined,
@@ -98,6 +103,7 @@ const getSubgraphData = async () => {
 				untilRound
 			}
 			_meta {
+				deployment
 				block {
 					number
 				}
@@ -123,6 +129,7 @@ const getSubgraphData = async () => {
 		return undefined;
 	}
 
+	lastDeployment = subgraphResponse?._meta?.deployment || '';
 	const subgraphBlockNumber = subgraphResponse?._meta?.block?.number;
 	const isOk = checkSubgraphHealth(currentBlock, subgraphBlockNumber);
 	return isOk && subgraphResponse;
