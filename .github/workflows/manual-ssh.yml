@@ -15,7 +15,7 @@ jobs:
 
     - name: SSH and Redeploy
       run: |
-        ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa ${{ secrets.USERNAME }}@${{ secrets.HOST }} '
+        ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa ${{ secrets.USER }}@${{ secrets.HOST }} '
           cd ~/givpower-bots/givpower-bot-optimism-production &&
           docker compose stop givpower-bot &&
           docker compose pull givpower-bot &&
