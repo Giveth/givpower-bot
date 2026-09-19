@@ -1,40 +1,64 @@
 import { gql, request } from 'graphql-request';
 import config from './config';
 import logger from './logger';
-import { getCurrentBlock, getCurrentRound } from './blockchain';
+import { getCurrentBlock } from './blockchain';
 import { ethers } from 'ethers';
 import { UnlockablePositions } from '../types/shared';
 
 /**
- * This desirable value is a little less than `POLL_PERIOD_SECOND / Network Average Block Time`
- * If POLL_PERIOD_SECOND 300 seconds (5m)
- * Mainnet < 300 / 20 = 15
- * Gnosis < 300 / 5 = 60
+ * How far behind the network head the subgraph may be before we refuse its data.
+ * See `subgraphMaxBlockGap` in config for how to size this per chain.
  */
-const SUBGRAPH_NETWORK_MAX_BLOCK_GAP = 10;
+const SUBGRAPH_NETWORK_MAX_BLOCK_GAP = config.subgraphMaxBlockGap;
+
+/**
+ * Hard ceiling for the widened tolerance below. Without it the tolerance grows
+ * without bound on every failure, so a subgraph that is permanently behind
+ * eventually passes the health check and the bot acts on stale data.
+ */
+const MAX_ACCEPTABLE_NETWORK_GAP = SUBGRAPH_NETWORK_MAX_BLOCK_GAP * 5;
 
 let acceptableNetworkGap = SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
 
 const checkSubgraphHealth = (
 	networkLatestBlock: ethers.providers.Block,
-	subgraphNetworkNumber,
+	subgraphNetworkNumber: number | undefined,
 ): boolean => {
 	const { number: networkLatestBlockNumber } = networkLatestBlock;
 	logger.info('network latest block:', networkLatestBlockNumber);
 	logger.info('subgraph network number:', subgraphNetworkNumber);
+
+	// Without this, a response missing _meta makes the comparison below NaN,
+	// which is never true - so the subgraph would be declared healthy and the
+	// tolerance would even be relaxed. An index corrupt enough to drop _meta is
+	// exactly the one we must not act on.
 	if (
-		subgraphNetworkNumber + acceptableNetworkGap <=
-		networkLatestBlockNumber
+		subgraphNetworkNumber === undefined ||
+		!Number.isFinite(subgraphNetworkNumber)
 	) {
+		logger.error(
+			'Subgraph did not report a block number (_meta missing or malformed); treating as unhealthy',
+		);
+		return false;
+	}
+
+	const subgraphBlockNumber: number = subgraphNetworkNumber;
+
+	if (subgraphBlockNumber + acceptableNetworkGap < networkLatestBlockNumber) {
 		logger.error(`Subgraph is ${
-			networkLatestBlockNumber - subgraphNetworkNumber
+			networkLatestBlockNumber - subgraphBlockNumber
 		} behind network!
         Network Latest Block Number: ${networkLatestBlockNumber}
-        Subgraph block number: ${subgraphNetworkNumber}
+        Subgraph block number: ${subgraphBlockNumber}
+        Current tolerance: ${acceptableNetworkGap} blocks
         `);
 
-		// Next time use the data if subgraph block number will be good for this run!
-		acceptableNetworkGap += SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
+		// Allow a little more lag next time, in case the subgraph is only
+		// briefly behind, but never past the ceiling.
+		acceptableNetworkGap = Math.min(
+			MAX_ACCEPTABLE_NETWORK_GAP,
+			acceptableNetworkGap + SUBGRAPH_NETWORK_MAX_BLOCK_GAP,
+		);
 		return false;
 	}
 
@@ -82,7 +106,7 @@ const getSubgraphData = async () => {
 	`;
 
 	try {
-		console.log('subgraphEndpoint', config.subgraphEndpoint);
+		logger.debug('subgraphEndpoint', config.subgraphEndpoint);
 		subgraphResponse = await request(
 			config.subgraphEndpoint,
 			query,
