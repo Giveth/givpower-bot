@@ -152,6 +152,7 @@ export const unlockPositions = async (
 	const summary: UnlockRunSummary = {
 		transactionsSent: 0,
 		positionsUnlocked: 0,
+		indeterminateTransactions: 0,
 		staleRoundsSkipped: [],
 	};
 
@@ -212,6 +213,9 @@ export const unlockPositions = async (
 			if (outcome.broadcast) {
 				summary.transactionsSent += 1;
 				summary.positionsUnlocked += outcome.unlocked;
+				if (!outcome.confirmed) {
+					summary.indeterminateTransactions += 1;
+				}
 				nonce += 1;
 			}
 		}

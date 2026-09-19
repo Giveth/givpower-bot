@@ -34,6 +34,17 @@ const service = async () => {
 		return;
 	}
 
+	// A transaction we stopped waiting for may still confirm and do real work,
+	// so a run containing one cannot be called ineffective. Leave the streak
+	// where it is rather than advancing it on a maybe.
+	if (summary.indeterminateTransactions > 0) {
+		logger.warn(
+			`Poll had ${summary.indeterminateTransactions} transaction(s) with no ` +
+				'receipt yet; not counting this poll either way.',
+		);
+		return;
+	}
+
 	consecutiveIneffectivePolls += 1;
 	logger.error(
 		`Poll sent ${summary.transactionsSent} unlock transaction(s) and ` +

@@ -78,14 +78,14 @@ const config: {
 
 	/**
 	 * How far behind the network head the subgraph may be before its data is
-	 * rejected, in blocks. Should be a little under
-	 * POLL_PERIOD_SECOND / network average block time, so it needs to be set
-	 * per chain: at a 300s poll period that is ~15 on mainnet (20s blocks),
-	 * ~60 on Gnosis (5s blocks) and ~150 on Optimism (2s blocks).
+	 * rejected, in blocks.
 	 *
-	 * The default deliberately matches the value this was hardcoded to before,
-	 * so deploying this change does not loosen any existing instance. Set it
-	 * per instance.
+	 * This is how far the subgraph trails the head when queried, not how many
+	 * blocks pass between polls - measured at 0-1 blocks on both Optimism and
+	 * Gnosis in normal operation. 10 is therefore already generous, and is
+	 * what this was hardcoded to before, so deploying this change does not
+	 * loosen any existing instance. Raise it only if a chain proves to need
+	 * it.
 	 */
 	subgraphMaxBlockGap: numberFromEnv(process.env.SUBGRAPH_MAX_BLOCK_GAP, 10),
 
@@ -94,7 +94,10 @@ const config: {
 	 * on it. The poll loop is serial, so an unmineable transaction would
 	 * otherwise stop the bot polling indefinitely while it still looks healthy.
 	 */
-	txWaitTimeoutMs: numberFromEnv(process.env.TX_WAIT_TIMEOUT_MS, 180_000),
+	txWaitTimeoutMs: Math.max(
+		1_000,
+		numberFromEnv(process.env.TX_WAIT_TIMEOUT_MS, 180_000),
+	),
 };
 
 export default config;

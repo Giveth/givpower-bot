@@ -44,7 +44,7 @@ const checkSubgraphHealth = (
 
 	const subgraphBlockNumber: number = subgraphNetworkNumber;
 
-	if (subgraphBlockNumber + acceptableNetworkGap <= networkLatestBlockNumber) {
+	if (subgraphBlockNumber + acceptableNetworkGap < networkLatestBlockNumber) {
 		logger.error(`Subgraph is ${
 			networkLatestBlockNumber - subgraphBlockNumber
 		} behind network!

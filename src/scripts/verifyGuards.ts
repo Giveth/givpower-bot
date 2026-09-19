@@ -43,6 +43,7 @@ const main = async () => {
 		UNLOCK_PER_TRANSACTION: '40',
 		MAX_ROUND_AGE: '5',
 		NO_GAS_OVERRIDE: 'true',
+		SUBGRAPH_MAX_BLOCK_GAP: '10',
 	});
 
 	/* eslint-disable @typescript-eslint/no-var-requires */
@@ -78,6 +79,11 @@ const main = async () => {
 		`sent=${summary.transactionsSent}`,
 	);
 	check(
+		'replay reports no indeterminate transactions',
+		summary.indeterminateTransactions === 0,
+		`indeterminate=${summary.indeterminateTransactions}`,
+	);
+	check(
 		'AC1 stale rounds refused',
 		[42, 44, 45, 46, 48, 49, 52, 54, 55, 56, 59, 61, 62, 65, 69, 70, 73].every(
 			r => skipped.has(r),
@@ -103,6 +109,34 @@ const main = async () => {
 		'AC6 missing _meta treated as unhealthy',
 		noMeta === undefined,
 		`got ${noMeta === undefined ? 'undefined' : JSON.stringify(noMeta)}`,
+	);
+
+	// A tolerance of N blocks must treat N as acceptable. Before, N-1 was the
+	// real limit and a tolerance of 0 rejected every healthy response.
+	const { getCurrentBlock: getHead } = require('../blockchain');
+	const headBlock = await getHead();
+	reply = {
+		data: {
+			tokenLocks: [],
+			_meta: { block: { number: headBlock.number - 10 } },
+		},
+	};
+	const atTolerance = await getUnlockablePositions();
+	check(
+		'subgraph exactly at the tolerance is healthy',
+		atTolerance !== undefined,
+	);
+
+	reply = {
+		data: {
+			tokenLocks: [],
+			_meta: { block: { number: headBlock.number - 11 } },
+		},
+	};
+	const pastTolerance = await getUnlockablePositions();
+	check(
+		'subgraph one block past the tolerance is refused',
+		pastTolerance === undefined,
 	);
 
 	// A subgraph pinned far behind the head must also be refused.

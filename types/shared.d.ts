@@ -21,6 +21,12 @@ export interface UnlockRunSummary {
 	transactionsSent: number;
 	/** Positions the chain confirmed as unlocked. */
 	positionsUnlocked: number;
+	/**
+	 * Transactions that were broadcast but whose receipt never arrived within
+	 * the wait timeout. They may yet confirm and do real work, so a run
+	 * containing any of them cannot be judged ineffective.
+	 */
+	indeterminateTransactions: number;
 	/** Rounds refused for being too far behind the current round. */
 	staleRoundsSkipped: number[];
 }
