@@ -70,7 +70,7 @@ const main = async () => {
 	stale[String(currentRound - Number(process.env.MAX_ROUND_AGE))] = [];
 	stale[String(currentRound - Number(process.env.MAX_ROUND_AGE) - 1)] = [];
 
-	const summary = await unlockPositions(stale);
+	const summary = await unlockPositions(stale, currentRound);
 	const skipped = new Set<number>(summary.staleRoundsSkipped);
 
 	check(

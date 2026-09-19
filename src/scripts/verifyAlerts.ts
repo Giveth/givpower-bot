@@ -1,0 +1,364 @@
+/**
+ * Standalone verification for Discord alerting. No test framework is
+ * configured, so this drives the real code against a local fake webhook and a
+ * read-only RPC.
+ *
+ *   yarn verify-alerts
+ *
+ * The signer is a throwaway key with no funds, so nothing can be broadcast.
+ */
+import * as http from 'http';
+import * as path from 'path';
+import { ethers } from 'ethers';
+
+const results: { name: string; pass: boolean; detail: string }[] = [];
+const check = (name: string, pass: boolean, detail = '') =>
+	results.push({ name, pass, detail });
+
+let received: unknown[] = [];
+let respondWith = 204;
+
+const server = http.createServer((req, res) => {
+	let body = '';
+	req.on('data', c => (body += c));
+	req.on('end', () => {
+		if (respondWith === 204) received.push(JSON.parse(body));
+		res.writeHead(respondWith).end();
+	});
+});
+
+let subgraphReply: unknown = {};
+const subgraphServer = http.createServer((req, res) => {
+	let body = '';
+	req.on('data', c => (body += c));
+	req.on('end', () => {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(subgraphReply));
+	});
+});
+
+/** config caches env at import, so each case needs a fresh module graph. */
+const freshAlert = (env: Record<string, string>) => {
+	for (const mod of ['../config', '../alert', '../logger']) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, env);
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	return require('../alert');
+};
+
+const baseEnv = (port: number) => ({
+	NODE_ENV: '',
+	SUBGRAPH_ENDPOINT: 'http://unused.invalid',
+	NODE_URL: process.env.VERIFY_RPC_URL || 'https://mainnet.optimism.io',
+	GIVPOWER_CONTRACT_ADDRESS: '0x301C739CF6bfb6B47A74878BdEB13f92F13Ae5E7',
+	PRIVATE_KEY: ethers.Wallet.createRandom().privateKey,
+	DISCORD_ALERT_WEBHOOK_URL: `http://127.0.0.1:${port}/hook`,
+	DISCORD_ALERT_CHAIN_LABEL: 'optimism',
+	DISCORD_ALERT_THROTTLE_MINUTES: '60',
+	MIN_WALLET_BALANCE: '0.05',
+	EXPLORER_BASE_URL: 'https://optimistic.etherscan.io',
+});
+
+const main = async () => {
+	await new Promise<void>(r => server.listen(0, r));
+	await new Promise<void>(r => subgraphServer.listen(0, r));
+	const port = (server.address() as { port: number }).port;
+	const subgraphPort = (subgraphServer.address() as { port: number }).port;
+
+	// --- AC1 delivery -------------------------------------------------------
+	received = [];
+	let alert = freshAlert(baseEnv(port));
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Test alert',
+		description: 'hello',
+		dedupeKey: 'k1',
+	});
+	const first = received[0] as {
+		embeds: { title: string; footer: { text: string } }[];
+	};
+	check('AC1 alert delivered', received.length === 1);
+	check(
+		'AC1 footer carries source, chain and env',
+		received.length === 1 &&
+			/givpower-bot • optimism/.test(first.embeds[0].footer.text),
+		received.length ? first.embeds[0].footer.text : 'nothing received',
+	);
+
+	// --- AC4 throttling -----------------------------------------------------
+	received = [];
+	alert = freshAlert(baseEnv(port));
+	for (let i = 0; i < 5; i++) {
+		await alert.sendAlert({
+			severity: 'error',
+			title: 'Repeating',
+			description: `n=${i}`,
+			dedupeKey: 'same',
+		});
+	}
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Different',
+		description: 'other',
+		dedupeKey: 'other',
+	});
+	check(
+		'AC4 repeats throttled to one',
+		received.length === 2,
+		`posted=${received.length}`,
+	);
+
+	// --- AC2 unconfigured is a no-op ---------------------------------------
+	received = [];
+	alert = freshAlert({ ...baseEnv(port), DISCORD_ALERT_WEBHOOK_URL: '' });
+	let threw = false;
+	try {
+		await alert.sendAlert({
+			severity: 'error',
+			title: 'No webhook',
+			description: 'x',
+		});
+	} catch {
+		threw = true;
+	}
+	check(
+		'AC2 unconfigured: no request, no throw',
+		received.length === 0 && !threw,
+	);
+	check(
+		'AC2 isAlertingConfigured false',
+		alert.isAlertingConfigured() === false,
+	);
+
+	// --- AC3 never blocks ---------------------------------------------------
+	alert = freshAlert({
+		...baseEnv(port),
+		DISCORD_ALERT_WEBHOOK_URL: 'http://127.0.0.1:1/hook',
+	});
+	threw = false;
+	try {
+		await alert.sendAlert({
+			severity: 'error',
+			title: 'Unreachable',
+			description: 'x',
+		});
+	} catch {
+		threw = true;
+	}
+	check('AC3 unreachable webhook does not throw', !threw);
+
+	// A failure backs off briefly, so a Discord outage during a multi-chunk
+	// poll cannot become one slow failing request per chunk.
+	received = [];
+	respondWith = 500;
+	alert = freshAlert(baseEnv(port));
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Retry',
+		description: 'x',
+		dedupeKey: 'r',
+	});
+	respondWith = 204;
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Retry',
+		description: 'x',
+		dedupeKey: 'r',
+	});
+	check(
+		'failure backs off, suppressing an immediate retry',
+		received.length === 0,
+		`posted=${received.length}`,
+	);
+
+	// ...but the throttle window itself must not be consumed, or an outage
+	// would silence the condition for the whole window.
+	received = [];
+	respondWith = 500;
+	alert = freshAlert({
+		...baseEnv(port),
+		DISCORD_ALERT_FAILURE_BACKOFF_MS: '0',
+	});
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Retry',
+		description: 'x',
+		dedupeKey: 'r',
+	});
+	respondWith = 204;
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'Retry',
+		description: 'x',
+		dedupeKey: 'r',
+	});
+	check(
+		'failed send does not eat the throttle window',
+		received.length === 1,
+		`posted=${received.length}`,
+	);
+
+	// --- AC6 wallet under minimum ------------------------------------------
+	received = [];
+	for (const mod of ['../config', '../alert', '../logger', '../blockchain']) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, baseEnv(port));
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const blockchain = require('../blockchain');
+	await blockchain.checkWalletBalance();
+	check(
+		'AC6 empty wallet alerts',
+		received.length === 1,
+		`posted=${received.length}`,
+	);
+
+	// --- AC7/AC8 subgraph vs chain, live ------------------------------------
+	// Addresses the 16 Sept index claimed were unlockable. Rather than assert a
+	// fixed expectation - which would break the day any of them unlocks - read
+	// the chain first and assert the check agrees with it.
+	received = [];
+	const candidates = [
+		'0x555306b8798b225ae92f6abd24e1d41ba62bcb53',
+		'0xbf98949e0bdfe8a7d36af5dd8cd2c3d4c659ba62',
+		'0x4b7c0da1c299ce824f55a0190efb13663442fa2c',
+		'0x9924285ff2207d6e36642b6832a515a6a3aedcab',
+	];
+	const provider = new ethers.providers.JsonRpcProvider(
+		process.env.VERIFY_RPC_URL || 'https://mainnet.optimism.io',
+	);
+	const reader = new ethers.Contract(
+		'0x301C739CF6bfb6B47A74878BdEB13f92F13Ae5E7',
+		['function userLocks(address) view returns (uint256)'],
+		provider,
+	);
+	const currentRound = (await blockchain.getCurrentRound()) as number;
+	const emptyOnChain: string[] = [];
+	const lockedOnChain: string[] = [];
+	for (const user of candidates) {
+		const total = await reader.userLocks(user);
+		(total.isZero() ? emptyOnChain : lockedOnChain).push(user);
+	}
+	console.log(
+		`chain says: ${emptyOnChain.length} empty, ${lockedOnChain.length} still locked`,
+	);
+
+	// Rounds well behind the current one, so the settled-round gate lets them
+	// through and subgraph lag cannot explain a disagreement.
+	const positions: Record<string, string[]> = {};
+	candidates.forEach((user, i) => {
+		positions[String(currentRound - 10 - i)] = [user];
+	});
+
+	const mismatches = await blockchain.findSubgraphChainMismatches(
+		positions,
+		currentRound,
+		'QmUrLouBJmwahqamEMuspWPtSgucFejQfFicGmDZLzQpy1',
+	);
+	check(
+		'AC7 flags exactly the users with nothing on chain',
+		emptyOnChain.every(u => mismatches.includes(u)) &&
+			mismatches.length === emptyOnChain.length,
+		`flagged=${mismatches.length} expected=${emptyOnChain.length}`,
+	);
+	check(
+		'AC7 never flags a user who still holds a lock',
+		lockedOnChain.every(u => !mismatches.includes(u)),
+	);
+	check(
+		'AC8 mismatch alerts before any gas is spent',
+		emptyOnChain.length === 0 || received.length === 1,
+		`posted=${received.length}`,
+	);
+
+	// Rounds the bot is actively working must NOT be sampled, or the bot's own
+	// successful unlocks would be reported as mismatches.
+	received = [];
+	const activeRound: Record<string, string[]> = {
+		[String(currentRound - 1)]: emptyOnChain.length ? [emptyOnChain[0]] : [],
+	};
+	const activeMismatches = await blockchain.findSubgraphChainMismatches(
+		activeRound,
+		currentRound,
+		'deployment',
+	);
+	check(
+		'recently worked rounds are excluded (no false positive)',
+		activeMismatches.length === 0 && received.length === 0,
+		`flagged=${activeMismatches.length} posted=${received.length}`,
+	);
+
+	// --- the incident shape, driven through a whole poll --------------------
+	// Long-closed rounds, exactly what the corrupt index served. The guard must
+	// refuse them, and somebody must be told.
+	received = [];
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		SUBGRAPH_ENDPOINT: `http://127.0.0.1:${subgraphPort}/graphql`,
+		MAX_ROUND_AGE: '5',
+		SUBGRAPH_MAX_BLOCK_GAP: '100000',
+	});
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const freshBlockchain = require('../blockchain');
+	const head = await freshBlockchain.getCurrentBlock();
+	subgraphReply = {
+		data: {
+			tokenLocks: [42, 44, 45, 52, 61, 69, 73].map(round => ({
+				user: { id: '0x555306b8798b225ae92f6abd24e1d41ba62bcb53' },
+				untilRound: String(round),
+			})),
+			_meta: {
+				deployment: 'QmCorruptDeployment',
+				block: { number: head.number },
+			},
+		},
+	};
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const service = require('../service').default;
+	const nonceBefore = await freshBlockchain.getCurrentRound();
+	await service();
+	const titles = received.map(
+		r => (r as { embeds: { title: string }[] }).embeds[0].title,
+	);
+	check(
+		'incident shape raises a stale-rounds alert',
+		titles.some(t => t.includes('long-closed rounds')),
+		titles.join(' | ') || 'nothing posted',
+	);
+	check(
+		'currentRound still readable during the poll',
+		nonceBefore !== undefined,
+	);
+
+	server.close();
+	subgraphServer.close();
+
+	console.log('');
+	let failed = 0;
+	for (const r of results) {
+		if (!r.pass) failed++;
+		console.log(
+			`${r.pass ? 'PASS' : 'FAIL'}  ${r.name}${
+				r.detail ? '  (' + r.detail + ')' : ''
+			}`,
+		);
+	}
+	console.log(`\n${results.length - failed}/${results.length} passed`);
+	process.exit(failed === 0 ? 0 : 1);
+};
+
+main().catch(e => {
+	console.error(e);
+	process.exit(1);
+});
