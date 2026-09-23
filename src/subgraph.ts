@@ -26,23 +26,52 @@ let lastDeployment = '';
 export const getLastSubgraphDeployment = (): string => lastDeployment;
 
 /**
- * The endpoint with any credential stripped, for alerts. The Graph's gateway
- * URLs carry the API key as a path segment (`/api/<key>/subgraphs/id/<id>`),
- * and an alert channel is not the place to post one.
+ * The host the bot queries, with no path at all.
+ *
+ * The Graph's gateway carries its API key in the URL path. Recognising which
+ * segment is the credential is a blocklist, and a blocklist fails open the
+ * moment an endpoint uses a shape it does not know, so none of the path is
+ * published. Which subgraph is actually being served is reported as a
+ * deployment hash instead, which is public by construction.
  */
-export const getSubgraphLabel = (): string => {
+export const getSubgraphHost = (): string => {
 	try {
-		const url = new URL(config.subgraphEndpoint);
-		const segments = url.pathname.split('/').filter(Boolean);
-		const redacted = segments.map((segment, i) =>
-			// The newer gateway form puts the key in a header instead and reads
-			// `/api/subgraphs/id/<id>`, so that one word is not a credential.
-			segments[i - 1] === 'api' && segment !== 'subgraphs' ? '***' : segment,
-		);
-		return `${url.host}/${redacted.join('/')}`;
+		return new URL(config.subgraphEndpoint).host;
 	} catch {
-		// Not a parseable URL; say nothing rather than risk echoing a secret.
 		return 'configured';
+	}
+};
+
+/**
+ * Asks the subgraph which deployment it is serving, for the startup report.
+ * Doubles as proof that the endpoint is reachable and authenticated before
+ * the first poll.
+ *
+ * Deliberately not `getUnlockablePositions()`: that runs the health check,
+ * which widens `acceptableNetworkGap` when it fails. A diagnostic must not
+ * loosen a guard before the first poll has even run.
+ */
+export const fetchSubgraphDeployment = async (): Promise<
+	string | undefined
+> => {
+	const query = gql`
+		query getDeployment {
+			_meta {
+				deployment
+			}
+		}
+	`;
+	try {
+		const response = await request(
+			config.subgraphEndpoint,
+			query,
+			{},
+			{ origin: config.subgraphDomain },
+		);
+		return response?._meta?.deployment || undefined;
+	} catch (e) {
+		logger.error('Could not read the subgraph deployment at startup', e);
+		return undefined;
 	}
 };
 

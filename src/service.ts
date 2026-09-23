@@ -9,8 +9,9 @@ import {
 	unlockPositions,
 } from './blockchain';
 import {
+	fetchSubgraphDeployment,
 	getLastSubgraphDeployment,
-	getSubgraphLabel,
+	getSubgraphHost,
 	getUnlockablePositions,
 } from './subgraph';
 
@@ -33,7 +34,19 @@ let halted = false;
 export const reportStartup = async (): Promise<void> => {
 	if (!config.alertOnStartup) return;
 
+	// Before the reads below, not after: with no webhook there is nowhere to
+	// put the answers, and each read can sit on ethers' 120s request timeout
+	// when the RPC is unreachable. The first poll makes the same calls anyway.
+	if (!isAlertingConfigured()) {
+		logger.warn(
+			'Started with no DISCORD_ALERT_WEBHOOK_URL: faults will be logged ' +
+				'here and nowhere else.',
+		);
+		return;
+	}
+
 	const { address, balance, currentRound } = await getBootStatus();
+	const deployment = await fetchSubgraphDeployment();
 
 	const delivered = await sendAlert({
 		severity: 'info',
@@ -61,7 +74,15 @@ export const reportStartup = async (): Promise<void> => {
 				value: config.givpowerContractAddress,
 				inline: true,
 			},
-			{ name: 'Subgraph', value: getSubgraphLabel() },
+			{ name: 'Subgraph', value: getSubgraphHost() },
+			{
+				// The deployment hash, not the endpoint: it says which index is
+				// actually being served, which is what distinguishes a
+				// misconfigured instance from a correct one, and unlike the URL
+				// it cannot carry a credential.
+				name: 'Deployment',
+				value: deployment ?? 'unreachable',
+			},
 			{
 				name: 'Poll period',
 				value: `${config.pollPeriodSecond}s`,
@@ -94,12 +115,7 @@ export const reportStartup = async (): Promise<void> => {
 
 	// A definitive line in the container logs either way, so alerting can be
 	// verified from `docker logs` without reading the webhook URL back out.
-	if (!isAlertingConfigured()) {
-		logger.warn(
-			'Started with no DISCORD_ALERT_WEBHOOK_URL: faults will be logged ' +
-				'here and nowhere else.',
-		);
-	} else if (delivered) {
+	if (delivered) {
 		logger.info('Startup alert delivered to Discord; alerting is working.');
 	} else {
 		logger.error(

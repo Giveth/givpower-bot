@@ -61,6 +61,10 @@ const baseEnv = (port: number) => ({
 	// override into every case that follows.
 	DISCORD_ALERT_FAILURE_BACKOFF_MS: '60000',
 	DISCORD_ALERT_ON_STARTUP: 'true',
+	DISCORD_ALERT_SOURCE_LABEL: 'givpower-bot',
+	DISCORD_ALERT_MENTION_USER_IDS: '',
+	DISCORD_ALERT_MENTION_ROLE_IDS: '',
+	SUBGRAPH_MISMATCH_SAMPLE_SIZE: '10',
 	MIN_WALLET_BALANCE: '0.05',
 	EXPLORER_BASE_URL: 'https://optimistic.etherscan.io',
 });
@@ -325,7 +329,25 @@ const main = async () => {
 		['function userLocks(address) view returns (uint256)'],
 		provider,
 	);
-	const currentRound = (await blockchain.getCurrentRound()) as number;
+	// The default RPC here is the public Optimism endpoint, which rate-limits.
+	// Without the retry a throttled read leaves currentRound undefined, every
+	// round below reads NaN, the settled-round filter drops everything and the
+	// three checks that follow report "flagged=0" as though the mismatch check
+	// were broken. Fail loudly instead of quietly.
+	let round: number | undefined;
+	for (let attempt = 0; attempt < 3 && round === undefined; attempt++) {
+		if (attempt > 0) await new Promise(r => setTimeout(r, 1000));
+		round = await blockchain.getCurrentRound();
+	}
+	if (round === undefined) {
+		throw new Error(
+			'could not read currentRound after 3 attempts - is the RPC reachable? ' +
+				'Set VERIFY_RPC_URL to a private endpoint if the public one is ' +
+				'rate-limiting.',
+		);
+	}
+	// Bound to a const so the narrowing survives into the closures below.
+	const currentRound: number = round;
 	const emptyOnChain: string[] = [];
 	const lockedOnChain: string[] = [];
 	for (const user of candidates) {
@@ -468,12 +490,14 @@ const main = async () => {
 	]) {
 		delete require.cache[require.resolve(path.join(__dirname, mod))];
 	}
+	// Shaped like a real gateway URL - key in the path - but pointed at the
+	// local fake so nothing leaves the machine.
+	subgraphReply = { data: { _meta: { deployment: 'QmExampleDeployment' } } };
 	Object.assign(process.env, {
 		...baseEnv(port),
-		// Shaped like a real gateway URL so the redaction below is meaningful.
 		SUBGRAPH_ENDPOINT:
-			'https://gateway-arbitrum.network.thegraph.com/api/' +
-			'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/subgraphs/id/QmExampleSubgraphId',
+			`http://127.0.0.1:${subgraphPort}` +
+			'/api/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/subgraphs/id/QmExampleSubgraphId',
 		POLL_PERIOD_SECOND: '300',
 	});
 	// eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -494,9 +518,14 @@ const main = async () => {
 	check(
 		'startup reports wallet, round, contract and poll period',
 		received.length === 1 &&
-			['Wallet', 'Current round', 'Contract', 'Poll period', 'Guards'].every(
-				name => startup.embeds[0].fields.some(f => f.name === name),
-			),
+			[
+				'Wallet',
+				'Current round',
+				'Contract',
+				'Deployment',
+				'Poll period',
+				'Guards',
+			].every(name => startup.embeds[0].fields.some(f => f.name === name)),
 		received.length
 			? startup.embeds[0].fields.map(f => f.name).join(', ')
 			: 'nothing posted',
@@ -506,14 +535,27 @@ const main = async () => {
 		received.length === 1 && !startup.content,
 		`content=${received.length ? startup.content : 'n/a'}`,
 	);
-	// A webhook channel is not the place to publish the gateway API key.
+	// A webhook channel is not the place to publish the gateway API key, and
+	// nothing from the path is published at all - so a credential in a segment
+	// this code has never seen cannot leak either.
 	check(
-		'startup redacts the subgraph API key',
+		'startup publishes no part of the endpoint path',
 		received.length === 1 &&
 			!startupText.includes('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') &&
-			startupText.includes('QmExampleSubgraphId'),
+			!startupText.includes('QmExampleSubgraphId') &&
+			startupText.includes(`127.0.0.1:${subgraphPort}`),
 		received.length
 			? startup.embeds[0].fields.find(f => f.name === 'Subgraph')?.value ?? ''
+			: 'nothing posted',
+	);
+	// Which index is actually being served comes from the subgraph itself.
+	check(
+		'startup reports the deployment the subgraph serves',
+		received.length === 1 &&
+			startup.embeds[0].fields.find(f => f.name === 'Deployment')?.value ===
+				'QmExampleDeployment',
+		received.length
+			? startup.embeds[0].fields.find(f => f.name === 'Deployment')?.value ?? ''
 			: 'nothing posted',
 	);
 
@@ -540,6 +582,40 @@ const main = async () => {
 		received.length === 0,
 		`posted=${received.length}`,
 	);
+	// With no webhook there is nowhere to put the answers, so the startup report
+	// must not spend RPC round trips - each up to ethers' 120s request timeout
+	// when the node is unreachable - before the first poll even starts.
+	received = [];
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		DISCORD_ALERT_WEBHOOK_URL: '',
+	});
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const quietBlockchain = require('../blockchain');
+	let bootStatusReads = 0;
+	const realBootStatus = quietBlockchain.getBootStatus;
+	quietBlockchain.getBootStatus = async () => {
+		bootStatusReads++;
+		return realBootStatus();
+	};
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	await require('../service').reportStartup();
+	check(
+		'no webhook: startup skips the RPC reads entirely',
+		bootStatusReads === 0 && received.length === 0,
+		`reads=${bootStatusReads} posted=${received.length}`,
+	);
+
 	// A dead webhook must not stop the bot booting.
 	for (const mod of [
 		'../config',
