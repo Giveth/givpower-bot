@@ -1,16 +1,113 @@
 import logger from './logger';
 import config from './config';
-import { sendAlert } from './alert';
+import { isAlertingConfigured, sendAlert } from './alert';
 import {
 	checkWalletBalance,
 	findSubgraphChainMismatches,
+	getBootStatus,
 	getCurrentRound,
 	unlockPositions,
 } from './blockchain';
-import { getLastSubgraphDeployment, getUnlockablePositions } from './subgraph';
+import {
+	getLastSubgraphDeployment,
+	getSubgraphLabel,
+	getUnlockablePositions,
+} from './subgraph';
 
 let consecutiveIneffectivePolls = 0;
 let halted = false;
+
+/**
+ * Posts once per process start, before the first poll.
+ *
+ * Every other alert here fires only when something is wrong, so a broken
+ * webhook is indistinguishable from a healthy bot - which is exactly how the
+ * September incident stayed quiet. This is the one message that proves the
+ * path works, and it carries the effective settings so a misconfigured
+ * instance is visible without shelling into the container.
+ *
+ * Deliberately not suppressed across restarts: the throttle map is
+ * in-process, so a container restart loop posts once per restart. That is
+ * noisy by design - a bot that cannot stay up is worth hearing about.
+ */
+export const reportStartup = async (): Promise<void> => {
+	if (!config.alertOnStartup) return;
+
+	const { address, balance, currentRound } = await getBootStatus();
+
+	const delivered = await sendAlert({
+		severity: 'info',
+		title: 'GIVpower bot started',
+		description:
+			'The bot is up and alerting is working - this message is the proof. ' +
+			'Everything below is the configuration it will actually run with.',
+		fields: [
+			{ name: 'Wallet', value: address },
+			{
+				name: 'Balance',
+				value: balance ?? 'unreadable (RPC error)',
+				inline: true,
+			},
+			{
+				name: 'Current round',
+				value:
+					currentRound === undefined
+						? 'unreadable (RPC error)'
+						: String(currentRound),
+				inline: true,
+			},
+			{
+				name: 'Contract',
+				value: config.givpowerContractAddress,
+				inline: true,
+			},
+			{ name: 'Subgraph', value: getSubgraphLabel() },
+			{
+				name: 'Poll period',
+				value: `${config.pollPeriodSecond}s`,
+				inline: true,
+			},
+			{
+				name: 'Guards',
+				value:
+					`max round age ${config.maxRoundAge}, halt after ` +
+					`${config.maxIneffectivePolls} ineffective polls, subgraph lag ` +
+					`${config.subgraphMaxBlockGap} blocks, tx wait ` +
+					`${config.txWaitTimeoutMs}ms`,
+			},
+			{
+				name: 'Alerting',
+				value:
+					`throttled to one message per ${Math.round(
+						config.alertThrottleMs / 60000,
+					)} min, ` +
+					`${
+						config.mentionUserIds.length + config.mentionRoleIds.length
+					} mention target(s), low-balance threshold ` +
+					`${config.minWalletBalance}`,
+			},
+		],
+		// Startup is not a fault, so it must never wake anyone up.
+		mention: false,
+		dedupeKey: 'startup',
+	});
+
+	// A definitive line in the container logs either way, so alerting can be
+	// verified from `docker logs` without reading the webhook URL back out.
+	if (!isAlertingConfigured()) {
+		logger.warn(
+			'Started with no DISCORD_ALERT_WEBHOOK_URL: faults will be logged ' +
+				'here and nowhere else.',
+		);
+	} else if (delivered) {
+		logger.info('Startup alert delivered to Discord; alerting is working.');
+	} else {
+		logger.error(
+			'Startup alert did NOT reach Discord. The webhook is set but not ' +
+				'usable - check DISCORD_ALERT_WEBHOOK_URL.',
+		);
+	}
+};
 
 const service = async () => {
 	if (halted) {

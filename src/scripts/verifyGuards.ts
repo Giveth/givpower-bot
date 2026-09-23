@@ -113,8 +113,16 @@ const main = async () => {
 
 	// A tolerance of N blocks must treat N as acceptable. Before, N-1 was the
 	// real limit and a tolerance of 0 rejected every healthy response.
-	const { getCurrentBlock: getHead } = require('../blockchain');
-	const headBlock = await getHead();
+	//
+	// The head is pinned for these three cases. They read it once to build the
+	// reply and getUnlockablePositions reads it again internally, so on a live
+	// chain a block landing between the two made the gap 11 rather than 10 -
+	// and because a failed health check widens the tolerance, that one flake
+	// then cascaded into the next case passing when it should not.
+	const blockchain = require('../blockchain');
+	const liveGetCurrentBlock = blockchain.getCurrentBlock;
+	const headBlock = await liveGetCurrentBlock();
+	blockchain.getCurrentBlock = async () => headBlock;
 	reply = {
 		data: {
 			tokenLocks: [],
@@ -145,15 +153,14 @@ const main = async () => {
 	check('AC6 far-behind subgraph refused', farBehind === undefined);
 
 	// --- healthy path still works -------------------------------------------
-	const { getCurrentBlock } = require('../blockchain');
-	const head = await getCurrentBlock();
 	reply = {
 		data: {
 			tokenLocks: [{ user: { id: '0xAAA' }, untilRound: '7' }],
-			_meta: { block: { number: head.number } },
+			_meta: { block: { number: headBlock.number } },
 		},
 	};
 	const healthy = await getUnlockablePositions();
+	blockchain.getCurrentBlock = liveGetCurrentBlock;
 	check(
 		'healthy subgraph accepted',
 		healthy !== undefined && healthy['7']?.length === 1,

@@ -56,6 +56,11 @@ const baseEnv = (port: number) => ({
 	DISCORD_ALERT_WEBHOOK_URL: `http://127.0.0.1:${port}/hook`,
 	DISCORD_ALERT_CHAIN_LABEL: 'optimism',
 	DISCORD_ALERT_THROTTLE_MINUTES: '60',
+	// Spelled out because freshAlert merges into process.env rather than
+	// replacing it: without these, a case that overrides one of them leaks the
+	// override into every case that follows.
+	DISCORD_ALERT_FAILURE_BACKOFF_MS: '60000',
+	DISCORD_ALERT_ON_STARTUP: 'true',
 	MIN_WALLET_BALANCE: '0.05',
 	EXPLORER_BASE_URL: 'https://optimistic.etherscan.io',
 });
@@ -199,6 +204,93 @@ const main = async () => {
 		`posted=${received.length}`,
 	);
 
+	// The backoff has to be process-wide, not per key. One poll emits
+	// wallet-low, subgraph-mismatch, a junk-tx per stale round and
+	// stale-rounds - all different keys - so a per-key backoff would still let
+	// every one of them make its own 10s failing request while Discord is down,
+	// and the junk-tx ones are awaited inside the unlock loop.
+	received = [];
+	respondWith = 500;
+	alert = freshAlert(baseEnv(port));
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'First',
+		description: 'x',
+		dedupeKey: 'wallet-low',
+	});
+	respondWith = 204;
+	let reachedDiscord = 0;
+	for (const key of ['subgraph-mismatch', 'junk-tx:66', 'stale-rounds']) {
+		if (
+			await alert.sendAlert({
+				severity: 'error',
+				title: key,
+				description: 'x',
+				dedupeKey: key,
+			})
+		) {
+			reachedDiscord++;
+		}
+	}
+	check(
+		'one failure backs off every key, not just its own',
+		received.length === 0 && reachedDiscord === 0,
+		`posted=${received.length}`,
+	);
+
+	// ...and recovers as soon as a send succeeds again.
+	received = [];
+	respondWith = 500;
+	alert = freshAlert({
+		...baseEnv(port),
+		DISCORD_ALERT_FAILURE_BACKOFF_MS: '0',
+	});
+	await alert.sendAlert({
+		severity: 'error',
+		title: 'First',
+		description: 'x',
+		dedupeKey: 'a',
+	});
+	respondWith = 204;
+	const okAfterRecovery = await alert.sendAlert({
+		severity: 'error',
+		title: 'Second',
+		description: 'x',
+		dedupeKey: 'b',
+	});
+	check(
+		'sendAlert reports delivery, and recovers after an outage',
+		okAfterRecovery === true && received.length === 1,
+		`delivered=${okAfterRecovery} posted=${received.length}`,
+	);
+
+	// Unconfigured and throttled both report "did not reach Discord", so the
+	// startup check below cannot mistake either for a working webhook.
+	alert = freshAlert({ ...baseEnv(port), DISCORD_ALERT_WEBHOOK_URL: '' });
+	const unconfiguredResult = await alert.sendAlert({
+		severity: 'info',
+		title: 'x',
+		description: 'x',
+	});
+	alert = freshAlert(baseEnv(port));
+	await alert.sendAlert({
+		severity: 'info',
+		title: 'x',
+		description: 'x',
+		dedupeKey: 't',
+	});
+	const throttledResult = await alert.sendAlert({
+		severity: 'info',
+		title: 'x',
+		description: 'x',
+		dedupeKey: 't',
+	});
+	check(
+		'sendAlert returns false when unconfigured or throttled',
+		unconfiguredResult === false && throttledResult === false,
+		`unconfigured=${unconfiguredResult} throttled=${throttledResult}`,
+	);
+
 	// --- AC6 wallet under minimum ------------------------------------------
 	received = [];
 	for (const mod of ['../config', '../alert', '../logger', '../blockchain']) {
@@ -272,6 +364,27 @@ const main = async () => {
 		`posted=${received.length}`,
 	);
 
+	// The alert has to name the position it disagrees about and both sides of
+	// the comparison, or it cannot be acted on without re-running the query by
+	// hand.
+	const mismatchFields = received.length
+		? (
+				received[0] as {
+					embeds: { fields: { name: string; value: string }[] }[];
+				}
+		  ).embeds[0].fields
+		: [];
+	const comparison = mismatchFields.find(f => f.name.includes('userLocks'));
+	check(
+		'AC7 alert carries the user, the claimed round and the chain value',
+		emptyOnChain.length === 0 ||
+			(comparison !== undefined &&
+				comparison.value.includes(emptyOnChain[0]) &&
+				/round \d/.test(comparison.value) &&
+				comparison.value.includes('chain holds 0')),
+		comparison ? comparison.value.split('\n')[0] : 'no comparison field',
+	);
+
 	// Rounds the bot is actively working must NOT be sampled, or the bot's own
 	// successful unlocks would be reported as mismatches.
 	received = [];
@@ -340,6 +453,116 @@ const main = async () => {
 		'currentRound still readable during the poll',
 		nonceBefore !== undefined,
 	);
+
+	// --- startup report -----------------------------------------------------
+	// The only alert that fires when nothing is wrong, so it is what proves the
+	// webhook works at all.
+	received = [];
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		// Shaped like a real gateway URL so the redaction below is meaningful.
+		SUBGRAPH_ENDPOINT:
+			'https://gateway-arbitrum.network.thegraph.com/api/' +
+			'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/subgraphs/id/QmExampleSubgraphId',
+		POLL_PERIOD_SECOND: '300',
+	});
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	await require('../service').reportStartup();
+	const startup = received[0] as {
+		content?: string;
+		embeds: {
+			title: string;
+			fields: { name: string; value: string }[];
+		}[];
+	};
+	check(
+		'startup posts exactly one message',
+		received.length === 1,
+		`posted=${received.length}`,
+	);
+	const startupText = received.length ? JSON.stringify(startup) : '';
+	check(
+		'startup reports wallet, round, contract and poll period',
+		received.length === 1 &&
+			['Wallet', 'Current round', 'Contract', 'Poll period', 'Guards'].every(
+				name => startup.embeds[0].fields.some(f => f.name === name),
+			),
+		received.length
+			? startup.embeds[0].fields.map(f => f.name).join(', ')
+			: 'nothing posted',
+	);
+	check(
+		'startup never mentions anyone',
+		received.length === 1 && !startup.content,
+		`content=${received.length ? startup.content : 'n/a'}`,
+	);
+	// A webhook channel is not the place to publish the gateway API key.
+	check(
+		'startup redacts the subgraph API key',
+		received.length === 1 &&
+			!startupText.includes('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') &&
+			startupText.includes('QmExampleSubgraphId'),
+		received.length
+			? startup.embeds[0].fields.find(f => f.name === 'Subgraph')?.value ?? ''
+			: 'nothing posted',
+	);
+
+	// Opting out has to actually opt out.
+	received = [];
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		DISCORD_ALERT_ON_STARTUP: 'false',
+	});
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	await require('../service').reportStartup();
+	check(
+		'DISCORD_ALERT_ON_STARTUP=false posts nothing',
+		received.length === 0,
+		`posted=${received.length}`,
+	);
+	// A dead webhook must not stop the bot booting.
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		DISCORD_ALERT_WEBHOOK_URL: 'http://127.0.0.1:1/hook',
+	});
+	threw = false;
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		await require('../service').reportStartup();
+	} catch {
+		threw = true;
+	}
+	check('startup survives an unreachable webhook', !threw);
 
 	server.close();
 	subgraphServer.close();

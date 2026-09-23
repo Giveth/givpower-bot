@@ -80,7 +80,17 @@ const truncate = (value: string, limit: number): string =>
  * condition. That is the trade for not needing a shared store.
  */
 const lastSentAt = new Map<string, number>();
-const lastFailedAt = new Map<string, number>();
+
+/**
+ * Delivery health is a property of Discord, not of any one alert, so this is
+ * process-wide rather than per key. Keyed per key it only ever suppressed
+ * repeats of the same condition, and a single poll can emit `wallet-low`,
+ * `subgraph-mismatch`, one `junk-tx:<round>` per stale round and
+ * `stale-rounds` - each a distinct key, so each still made its own request
+ * and each could block for REQUEST_TIMEOUT_MS. The junk-tx ones are awaited
+ * inside the unlock loop, so those timeouts delayed real transactions.
+ */
+let lastFailedAt: number | undefined;
 
 export const isAlertingConfigured = (): boolean =>
 	Boolean(config.discordWebhookUrl);
@@ -95,8 +105,12 @@ const buildMentions = (): string => {
  * Reports a fault condition: always logged, and posted to Discord when a
  * webhook is configured. Never throws and never blocks unlocking - a Discord
  * outage must not stop the bot doing its job.
+ *
+ * Returns whether it actually reached Discord. False covers unconfigured,
+ * throttled, backed off and failed alike, so callers must not read it as a
+ * fault - only the startup check, which wants to know delivery works, uses it.
  */
-export const sendAlert = async (opts: AlertOptions): Promise<void> => {
+export const sendAlert = async (opts: AlertOptions): Promise<boolean> => {
 	const logLine = `[${opts.severity}] ${opts.title} - ${opts.description}`;
 	if (opts.severity === 'info') {
 		logger.info(logLine);
@@ -106,7 +120,7 @@ export const sendAlert = async (opts: AlertOptions): Promise<void> => {
 		logger.error(logLine);
 	}
 
-	if (!config.discordWebhookUrl) return;
+	if (!config.discordWebhookUrl) return false;
 
 	const dedupeKey = opts.dedupeKey ?? `${opts.severity}:${opts.title}`;
 	// Floored: a configured 0 would otherwise mean "post every poll", which is
@@ -118,16 +132,18 @@ export const sendAlert = async (opts: AlertOptions): Promise<void> => {
 	const now = Date.now();
 
 	const previous = lastSentAt.get(dedupeKey);
-	if (previous !== undefined && now - previous < throttleMs) return;
+	if (previous !== undefined && now - previous < throttleMs) return false;
 
 	// After a failed send, stay quiet briefly. Without this, a Discord outage
-	// during a poll that emits one alert per chunk becomes one slow failing
-	// request per chunk, all inside a single poll. The throttle window itself
-	// is deliberately left unconsumed, so the condition can still be reported
-	// once Discord recovers.
-	const failedAt = lastFailedAt.get(dedupeKey);
-	if (failedAt !== undefined && now - failedAt < config.alertFailureBackoffMs) {
-		return;
+	// during a poll that emits several alerts becomes one slow failing request
+	// per alert, all inside a single poll. The throttle window itself is
+	// deliberately left unconsumed, so the condition can still be reported once
+	// Discord recovers.
+	if (
+		lastFailedAt !== undefined &&
+		now - lastFailedAt < config.alertFailureBackoffMs
+	) {
+		return false;
 	}
 
 	const shouldMention =
@@ -171,18 +187,20 @@ export const sendAlert = async (opts: AlertOptions): Promise<void> => {
 			signal: AbortSignal?.timeout?.(REQUEST_TIMEOUT_MS),
 		});
 		if (!response.ok) {
-			lastFailedAt.set(dedupeKey, now);
+			lastFailedAt = now;
 			logger.warn(
 				`Failed to post alert "${dedupeKey}" to Discord: ${response.status} ${response.statusText}`,
 			);
-			return;
+			return false;
 		}
-		lastFailedAt.delete(dedupeKey);
+		lastFailedAt = undefined;
 		// Stamped only on a successful send, so an outage cannot silently eat
 		// the whole throttle window.
 		lastSentAt.set(dedupeKey, now);
+		return true;
 	} catch (e) {
-		lastFailedAt.set(dedupeKey, now);
+		lastFailedAt = now;
 		logger.warn(`Failed to post alert "${dedupeKey}" to Discord: ${e}`);
+		return false;
 	}
 };

@@ -51,6 +51,9 @@ const lockReader = new ethers.Contract(
  */
 const SETTLED_ROUND_LAG = 2;
 
+/** Users listed individually in a mismatch alert before it summarises. */
+const MISMATCH_REPORT_LIMIT = 10;
+
 const explorerTxLink = (hash: string): string =>
 	config.explorerBaseUrl ? `${config.explorerBaseUrl}/tx/${hash}` : hash;
 
@@ -351,6 +354,17 @@ export const findSubgraphChainMismatches = async (
 
 	if (users.length === 0) return [];
 
+	// Which rounds the subgraph claimed for each sampled user, so the alert can
+	// name the position it disagrees about rather than just the user.
+	const claimedRounds = new Map<string, number[]>();
+	for (const round of settledRounds) {
+		for (const user of positions[round] || []) {
+			const rounds = claimedRounds.get(user) || [];
+			rounds.push(Number(round));
+			claimedRounds.set(user, rounds);
+		}
+	}
+
 	const mismatched: string[] = [];
 	for (const user of users) {
 		try {
@@ -362,6 +376,20 @@ export const findSubgraphChainMismatches = async (
 	}
 
 	if (mismatched.length > 0) {
+		// Both sides of the comparison, per user: what the subgraph claims is
+		// unlockable, and what the chain actually holds. Capped so the field
+		// stays inside Discord's 1024-character limit.
+		const claims = mismatched
+			.slice(0, MISMATCH_REPORT_LIMIT)
+			.map(user => {
+				const rounds = (claimedRounds.get(user) || [])
+					.sort((a, b) => a - b)
+					.join(', ');
+				return `\`${user}\` round ${rounds} -> chain holds 0`;
+			})
+			.join('\n');
+		const omitted = mismatched.length - MISMATCH_REPORT_LIMIT;
+
 		await sendAlert({
 			// Warning rather than critical: this proves the subgraph wrong but
 			// cannot measure how wrong, and it does not by itself mean gas is
@@ -379,11 +407,41 @@ export const findSubgraphChainMismatches = async (
 					inline: true,
 				},
 				{ name: 'Deployment', value: deployment || 'unknown', inline: true },
-				{ name: 'Example user', value: mismatched[0] },
+				{
+					// `userLocks` is the user's total across every round, so a
+					// zero here means the subgraph is wrong about every round it
+					// listed for them, not just one.
+					name: 'Subgraph claim vs chain userLocks',
+					value: omitted > 0 ? `${claims}\n...and ${omitted} more` : claims,
+				},
 			],
 			dedupeKey: 'subgraph-mismatch',
 		});
 	}
 
 	return mismatched;
+};
+
+/**
+ * Wallet address, balance and the round the contract reports, for the startup
+ * report. Read together so one RPC failure does not leave a half-filled
+ * message, and never throws - a bot that cannot reach its RPC at boot still
+ * needs to be able to say so.
+ */
+export const getBootStatus = async (): Promise<{
+	address: string;
+	balance?: string;
+	currentRound?: number;
+}> => {
+	let balance: string | undefined;
+	try {
+		balance = ethers.utils.formatEther(await signer.getBalance());
+	} catch (e) {
+		logger.error('Could not read bot wallet balance at startup', e);
+	}
+	return {
+		address: signer.address,
+		balance,
+		currentRound: await getCurrentRound(),
+	};
 };

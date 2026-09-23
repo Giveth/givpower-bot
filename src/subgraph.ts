@@ -25,6 +25,27 @@ let lastDeployment = '';
 
 export const getLastSubgraphDeployment = (): string => lastDeployment;
 
+/**
+ * The endpoint with any credential stripped, for alerts. The Graph's gateway
+ * URLs carry the API key as a path segment (`/api/<key>/subgraphs/id/<id>`),
+ * and an alert channel is not the place to post one.
+ */
+export const getSubgraphLabel = (): string => {
+	try {
+		const url = new URL(config.subgraphEndpoint);
+		const segments = url.pathname.split('/').filter(Boolean);
+		const redacted = segments.map((segment, i) =>
+			// The newer gateway form puts the key in a header instead and reads
+			// `/api/subgraphs/id/<id>`, so that one word is not a credential.
+			segments[i - 1] === 'api' && segment !== 'subgraphs' ? '***' : segment,
+		);
+		return `${url.host}/${redacted.join('/')}`;
+	} catch {
+		// Not a parseable URL; say nothing rather than risk echoing a secret.
+		return 'configured';
+	}
+};
+
 const checkSubgraphHealth = (
 	networkLatestBlock: ethers.providers.Block,
 	subgraphNetworkNumber: number | undefined,

@@ -56,6 +56,7 @@ const config: {
 	chainLabel: string;
 	alertThrottleMs: number;
 	alertFailureBackoffMs: number;
+	alertOnStartup: boolean;
 	mentionUserIds: string[];
 	mentionRoleIds: string[];
 	explorerBaseUrl: string;
@@ -145,6 +146,13 @@ const config: {
 		process.env.DISCORD_ALERT_FAILURE_BACKOFF_MS,
 		60_000,
 	),
+
+	/**
+	 * Post an informational message on every start. On by default: it is the
+	 * only alert that fires when nothing is wrong, so without it a broken
+	 * webhook looks exactly like a healthy bot.
+	 */
+	alertOnStartup: process.env.DISCORD_ALERT_ON_STARTUP !== 'false',
 
 	mentionUserIds: splitIds(process.env.DISCORD_ALERT_MENTION_USER_IDS),
 	mentionRoleIds: splitIds(process.env.DISCORD_ALERT_MENTION_ROLE_IDS),
