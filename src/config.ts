@@ -30,6 +30,12 @@ const numberFromEnv = (
 	return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const splitIds = (raw: string | undefined): string[] =>
+	(raw || '')
+		.split(',')
+		.map(id => id.trim())
+		.filter(Boolean);
+
 const config: {
 	nodeUrl: string;
 	pollPeriodSecond: number;
@@ -44,7 +50,19 @@ const config: {
 	maxRoundAge: number;
 	maxIneffectivePolls: number;
 	subgraphMaxBlockGap: number;
+	subgraphTimeoutMs: number;
 	txWaitTimeoutMs: number;
+	discordWebhookUrl: string;
+	discordSourceLabel: string;
+	chainLabel: string;
+	alertThrottleMs: number;
+	alertFailureBackoffMs: number;
+	alertOnStartup: boolean;
+	mentionUserIds: string[];
+	mentionRoleIds: string[];
+	explorerBaseUrl: string;
+	minWalletBalance: number;
+	mismatchSampleSize: number;
 } = {
 	nodeUrl: process.env.NODE_URL || 'https://rpc.gnosischain.com/',
 	pollPeriodSecond: Number(process.env.POLL_PERIOD_SECOND) || 60,
@@ -90,6 +108,19 @@ const config: {
 	subgraphMaxBlockGap: numberFromEnv(process.env.SUBGRAPH_MAX_BLOCK_GAP, 10),
 
 	/**
+	 * How long to wait for a subgraph query before giving up on it.
+	 *
+	 * Neither graphql-request nor the fetch under it has a timeout, so without
+	 * this an endpoint that accepts the connection and then goes quiet stops
+	 * the bot polling forever while the container still looks healthy. Floored
+	 * so a stray 0 cannot mean "abort immediately".
+	 */
+	subgraphTimeoutMs: Math.max(
+		1_000,
+		numberFromEnv(process.env.SUBGRAPH_TIMEOUT_MS, 30_000),
+	),
+
+	/**
 	 * How long to wait for an unlock transaction to be mined before giving up
 	 * on it. The poll loop is serial, so an unmineable transaction would
 	 * otherwise stop the bot polling indefinitely while it still looks healthy.
@@ -97,6 +128,63 @@ const config: {
 	txWaitTimeoutMs: Math.max(
 		1_000,
 		numberFromEnv(process.env.TX_WAIT_TIMEOUT_MS, 180_000),
+	),
+
+	/**
+	 * Discord webhook for fault alerts. Unset disables alerting entirely, which
+	 * is how every instance behaves until one is configured.
+	 */
+	discordWebhookUrl: process.env.DISCORD_ALERT_WEBHOOK_URL || '',
+
+	/** Shown in the embed footer, so one shared channel stays readable. */
+	discordSourceLabel: process.env.DISCORD_ALERT_SOURCE_LABEL || 'givpower-bot',
+
+	/**
+	 * Which chain this instance runs against. Set explicitly rather than read
+	 * from the RPC so it is still correct when the RPC is down at boot.
+	 */
+	chainLabel: process.env.DISCORD_ALERT_CHAIN_LABEL || 'unknown-chain',
+
+	/**
+	 * How long the same condition stays quiet after alerting. At a 300s poll
+	 * period a short window would post on nearly every poll.
+	 */
+	alertThrottleMs:
+		numberFromEnv(process.env.DISCORD_ALERT_THROTTLE_MINUTES, 60) * 60 * 1000,
+
+	/**
+	 * How long to stay quiet after a failed send, so one Discord outage cannot
+	 * turn a multi-chunk poll into a burst of slow failing requests.
+	 */
+	alertFailureBackoffMs: numberFromEnv(
+		process.env.DISCORD_ALERT_FAILURE_BACKOFF_MS,
+		60_000,
+	),
+
+	/**
+	 * Post an informational message on every start. On by default: it is the
+	 * only alert that fires when nothing is wrong, so without it a broken
+	 * webhook looks exactly like a healthy bot.
+	 */
+	alertOnStartup: process.env.DISCORD_ALERT_ON_STARTUP !== 'false',
+
+	mentionUserIds: splitIds(process.env.DISCORD_ALERT_MENTION_USER_IDS),
+	mentionRoleIds: splitIds(process.env.DISCORD_ALERT_MENTION_ROLE_IDS),
+
+	/** Used to link transactions in alerts, e.g. https://optimistic.etherscan.io */
+	explorerBaseUrl: process.env.EXPLORER_BASE_URL || '',
+
+	/** Native-currency balance below which the wallet is reported as low. */
+	minWalletBalance: numberFromEnv(process.env.MIN_WALLET_BALANCE, 0.05),
+
+	/**
+	 * How many of the users the subgraph claims are unlockable to verify against
+	 * the chain each poll. One disagreement is enough to prove the subgraph
+	 * wrong, so a small sample is plenty.
+	 */
+	mismatchSampleSize: numberFromEnv(
+		process.env.SUBGRAPH_MISMATCH_SAMPLE_SIZE,
+		10,
 	),
 };
 
