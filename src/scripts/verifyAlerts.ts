@@ -27,6 +27,11 @@ const server = http.createServer((req, res) => {
 	});
 });
 
+/** Accepts the connection and then never answers, for the timeout checks. */
+const blackHoleServer = http.createServer(() => {
+	// Deliberately empty: no response is ever written.
+});
+
 let subgraphReply: unknown = {};
 const subgraphServer = http.createServer((req, res) => {
 	let body = '';
@@ -72,8 +77,10 @@ const baseEnv = (port: number) => ({
 const main = async () => {
 	await new Promise<void>(r => server.listen(0, r));
 	await new Promise<void>(r => subgraphServer.listen(0, r));
+	await new Promise<void>(r => blackHoleServer.listen(0, r));
 	const port = (server.address() as { port: number }).port;
 	const subgraphPort = (subgraphServer.address() as { port: number }).port;
+	const blackHolePort = (blackHoleServer.address() as { port: number }).port;
 
 	// --- AC1 delivery -------------------------------------------------------
 	received = [];
@@ -582,6 +589,42 @@ const main = async () => {
 		received.length === 0,
 		`posted=${received.length}`,
 	);
+	// The startup report runs in front of the poll loop, so its subgraph read
+	// has to be bounded. graphql-request sets no timeout and neither does the
+	// fetch under it, so an endpoint that accepts the connection and then says
+	// nothing would stop the bot ever polling.
+	received = [];
+	for (const mod of [
+		'../config',
+		'../alert',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+		'../service',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		...baseEnv(port),
+		SUBGRAPH_ENDPOINT: `http://127.0.0.1:${blackHolePort}/graphql`,
+		SUBGRAPH_TIMEOUT_MS: '500',
+	});
+	const startedAt = Date.now();
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	await require('../service').reportStartup();
+	const elapsed = Date.now() - startedAt;
+	const hung = received[0] as {
+		embeds: { fields: { name: string; value: string }[] }[];
+	};
+	check(
+		'a subgraph that never answers cannot stall startup',
+		received.length === 1 &&
+			elapsed < 15000 &&
+			hung.embeds[0].fields.find(f => f.name === 'Deployment')?.value ===
+				'unreachable',
+		`elapsed=${elapsed}ms posted=${received.length}`,
+	);
+
 	// With no webhook there is nowhere to put the answers, so the startup report
 	// must not spend RPC round trips - each up to ethers' 120s request timeout
 	// when the node is unreachable - before the first poll even starts.
@@ -642,6 +685,7 @@ const main = async () => {
 
 	server.close();
 	subgraphServer.close();
+	blackHoleServer.close();
 
 	console.log('');
 	let failed = 0;

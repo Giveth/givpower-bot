@@ -1,4 +1,4 @@
-import { gql, request } from 'graphql-request';
+import { gql, request, Variables } from 'graphql-request';
 import config from './config';
 import logger from './logger';
 import { getCurrentBlock } from './blockchain';
@@ -24,6 +24,42 @@ let acceptableNetworkGap = SUBGRAPH_NETWORK_MAX_BLOCK_GAP;
 let lastDeployment = '';
 
 export const getLastSubgraphDeployment = (): string => lastDeployment;
+
+/**
+ * Every subgraph query, bounded.
+ *
+ * graphql-request sets no timeout and the fetch beneath it has none either, so
+ * an endpoint that accepts the connection and then never answers hangs the
+ * caller forever. In the poll loop that stalls the bot while the container
+ * still looks healthy - the same shape as the unbounded `tx.wait()` removed in
+ * #11 - and at startup it would stop the first poll ever running.
+ *
+ * AbortController rather than AbortSignal.timeout so this does not depend on
+ * the Node version, and the timer is always cleared so a fast reply cannot
+ * leave one pending.
+ */
+const requestWithTimeout = async (
+	query: string,
+	variables: Variables = {},
+): Promise<any> => {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), config.subgraphTimeoutMs);
+	try {
+		return await request({
+			url: config.subgraphEndpoint,
+			document: query,
+			variables,
+			requestHeaders: { origin: config.subgraphDomain },
+			// graphql-request bundles its own DOM typings, whose AbortSignal is
+			// not structurally identical to Node 18's global one. It is the
+			// same object at runtime; the cast only reconciles the two
+			// declarations.
+			signal: controller.signal as any,
+		});
+	} finally {
+		clearTimeout(timer);
+	}
+};
 
 /**
  * The host the bot queries, with no path at all.
@@ -62,12 +98,7 @@ export const fetchSubgraphDeployment = async (): Promise<
 		}
 	`;
 	try {
-		const response = await request(
-			config.subgraphEndpoint,
-			query,
-			{},
-			{ origin: config.subgraphDomain },
-		);
+		const response = await requestWithTimeout(query);
 		return response?._meta?.deployment || undefined;
 	} catch (e) {
 		logger.error('Could not read the subgraph deployment at startup', e);
@@ -163,14 +194,9 @@ const getSubgraphData = async () => {
 
 	try {
 		logger.debug('subgraphEndpoint', config.subgraphEndpoint);
-		subgraphResponse = await request(
-			config.subgraphEndpoint,
-			query,
-			{
-				lastBlockTimeStamp: currentBlock.timestamp,
-			},
-			{ origin: config.subgraphDomain },
-		);
+		subgraphResponse = await requestWithTimeout(query, {
+			lastBlockTimeStamp: currentBlock.timestamp,
+		});
 	} catch (e) {
 		logger.error(
 			'Error getting locked positions from subgraph',

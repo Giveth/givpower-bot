@@ -15,6 +15,7 @@ declare global {
 			MAX_ROUND_AGE: number;
 			MAX_INEFFECTIVE_POLLS: number;
 			SUBGRAPH_MAX_BLOCK_GAP: number;
+			SUBGRAPH_TIMEOUT_MS: number;
 			TX_WAIT_TIMEOUT_MS: number;
 			DISCORD_ALERT_WEBHOOK_URL: string;
 			DISCORD_ALERT_SOURCE_LABEL: string;

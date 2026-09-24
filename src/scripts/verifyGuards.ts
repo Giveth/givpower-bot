@@ -8,6 +8,7 @@
  * The signer is a throwaway key with no funds, so nothing can be broadcast.
  */
 import * as http from 'http';
+import * as path from 'path';
 import { ethers } from 'ethers';
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -25,9 +26,16 @@ const server = http.createServer((req, res) => {
 	});
 });
 
+/** Accepts the connection and then never answers. */
+const blackHoleServer = http.createServer(() => {
+	// Deliberately empty: no response is ever written.
+});
+
 const main = async () => {
 	await new Promise<void>(r => server.listen(0, r));
+	await new Promise<void>(r => blackHoleServer.listen(0, r));
 	const port = (server.address() as { port: number }).port;
+	const blackHolePort = (blackHoleServer.address() as { port: number }).port;
 
 	// Object.assign rather than direct assignment: the ambient declarations in
 	// types/environment.d.ts type these as numbers, though env values are always
@@ -161,13 +169,40 @@ const main = async () => {
 	};
 	const healthy = await getUnlockablePositions();
 	blockchain.getCurrentBlock = liveGetCurrentBlock;
+
 	check(
 		'healthy subgraph accepted',
 		healthy !== undefined && healthy['7']?.length === 1,
 		JSON.stringify(healthy),
 	);
 
+	// A subgraph that accepts the connection and then goes quiet must not stop
+	// the poll loop. graphql-request has no timeout of its own, so before
+	// SUBGRAPH_TIMEOUT_MS this hung the bot forever while the container still
+	// looked healthy - the same shape as the unbounded tx.wait().
+	for (const mod of [
+		'../config',
+		'../logger',
+		'../blockchain',
+		'../subgraph',
+	]) {
+		delete require.cache[require.resolve(path.join(__dirname, mod))];
+	}
+	Object.assign(process.env, {
+		SUBGRAPH_ENDPOINT: `http://127.0.0.1:${blackHolePort}/graphql`,
+		SUBGRAPH_TIMEOUT_MS: '500',
+	});
+	const stalledAt = Date.now();
+	const stalled = await require('../subgraph').getUnlockablePositions();
+	const stalledFor = Date.now() - stalledAt;
+	check(
+		'a subgraph that never answers is given up on',
+		stalled === undefined && stalledFor < 15000,
+		`elapsed=${stalledFor}ms`,
+	);
+
 	server.close();
+	blackHoleServer.close();
 
 	console.log('');
 	let failed = 0;

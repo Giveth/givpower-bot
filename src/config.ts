@@ -50,6 +50,7 @@ const config: {
 	maxRoundAge: number;
 	maxIneffectivePolls: number;
 	subgraphMaxBlockGap: number;
+	subgraphTimeoutMs: number;
 	txWaitTimeoutMs: number;
 	discordWebhookUrl: string;
 	discordSourceLabel: string;
@@ -105,6 +106,19 @@ const config: {
 	 * it.
 	 */
 	subgraphMaxBlockGap: numberFromEnv(process.env.SUBGRAPH_MAX_BLOCK_GAP, 10),
+
+	/**
+	 * How long to wait for a subgraph query before giving up on it.
+	 *
+	 * Neither graphql-request nor the fetch under it has a timeout, so without
+	 * this an endpoint that accepts the connection and then goes quiet stops
+	 * the bot polling forever while the container still looks healthy. Floored
+	 * so a stray 0 cannot mean "abort immediately".
+	 */
+	subgraphTimeoutMs: Math.max(
+		1_000,
+		numberFromEnv(process.env.SUBGRAPH_TIMEOUT_MS, 30_000),
+	),
 
 	/**
 	 * How long to wait for an unlock transaction to be mined before giving up
